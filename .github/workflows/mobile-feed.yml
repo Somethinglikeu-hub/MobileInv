@@ -1,0 +1,133 @@
+name: Publish Mobile Feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 16 * * 1-5"
+
+concurrency:
+  group: mobile-feed-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-mobile-feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      STATE_REPOSITORY: ${{ vars.BIST_STATE_REPOSITORY }}
+      FEED_REPOSITORY: ${{ vars.BIST_FEED_REPOSITORY }}
+      FEED_BASE_URL: ${{ vars.BIST_FEED_BASE_URL }}
+      STATE_BRANCH: ${{ vars.BIST_STATE_BRANCH || 'main' }}
+      FEED_BRANCH: ${{ vars.BIST_FEED_BRANCH || 'gh-pages' }}
+      TCMB_API_KEY: ${{ secrets.TCMB_API_KEY }}
+      PUBLISH_REPO_TOKEN: ${{ secrets.PUBLISH_REPO_TOKEN }}
+
+    steps:
+      - name: Check out code repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate required configuration
+        run: |
+          python - <<'PY'
+          import os
+          required = [
+              "STATE_REPOSITORY",
+              "FEED_REPOSITORY",
+              "FEED_BASE_URL",
+              "PUBLISH_REPO_TOKEN",
+          ]
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit(
+                  "Missing workflow vars/secrets: " + ", ".join(sorted(missing))
+              )
+          PY
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Restore runtime database from private state repo
+        run: |
+          set -euxo pipefail
+          git clone "https://x-access-token:${PUBLISH_REPO_TOKEN}@github.com/${STATE_REPOSITORY}.git" state-repo
+          cd state-repo
+          git checkout "${STATE_BRANCH}" || git checkout -B "${STATE_BRANCH}"
+          cd ..
+          mkdir -p data
+          if [ -f "state-repo/state/current/bist_picker.db.gz" ]; then
+            python - <<'PY'
+            import gzip
+            import shutil
+            from pathlib import Path
+
+            source = Path("state-repo/state/current/bist_picker.db.gz")
+            target = Path("data/bist_picker.db")
+            with gzip.open(source, "rb") as input_file, target.open("wb") as output_file:
+                shutil.copyfileobj(input_file, output_file)
+            PY
+          fi
+
+      - name: Run pipeline and export mobile feed
+        run: |
+          python -m bist_picker fetch
+          python -m bist_picker clean
+          python -m bist_picker score
+          python -m bist_picker pick
+          python -m bist_picker export-mobile-feed \
+            --feed-dir mobile-feed-dist \
+            --base-download-url "${FEED_BASE_URL}"
+
+      - name: Update private state repo
+        run: |
+          set -euxo pipefail
+          mkdir -p state-repo/state/current
+          python - <<'PY'
+          import gzip
+          import shutil
+          from pathlib import Path
+
+          source = Path("data/bist_picker.db")
+          target = Path("state-repo/state/current/bist_picker.db.gz")
+          with source.open("rb") as input_file, gzip.open(target, "wb") as output_file:
+              shutil.copyfileobj(input_file, output_file)
+          PY
+          cd state-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add state/current/bist_picker.db.gz
+            git commit -m "Update mobile pipeline state"
+            git push origin "${STATE_BRANCH}"
+          fi
+
+      - name: Publish manifest and snapshot to public feed repo
+        run: |
+          set -euxo pipefail
+          git clone "https://x-access-token:${PUBLISH_REPO_TOKEN}@github.com/${FEED_REPOSITORY}.git" feed-repo
+          cd feed-repo
+          git checkout "${FEED_BRANCH}" || git checkout --orphan "${FEED_BRANCH}"
+          cd ..
+          cp mobile-feed-dist/manifest.json feed-repo/manifest.json
+          cp mobile-feed-dist/mobile_snapshot.db.gz feed-repo/mobile_snapshot.db.gz
+          cd feed-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add manifest.json mobile_snapshot.db.gz
+            git commit -m "Publish mobile feed"
+            git push origin "${FEED_BRANCH}"
+          fi

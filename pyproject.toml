@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bist-picker"
+version = "0.1.0"
+description = "BIST Stock Picker â€” Buffett-style fundamental analysis for Borsa Istanbul"
+requires-python = ">=3.11"
+dependencies = [
+    "SQLAlchemy>=2.0",
+    "pandas>=2.1",
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "click>=8.1",
+    "rich>=13.0",
+    "yfinance>=0.2.30",
+    "tenacity>=8.2",
+    "pyyaml>=6.0",
+    "exchange-calendars>=4.5",
+    "numpy>=1.24",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+phase1-data = [
+    "isyatirimhisse>=5.0",
+    "borsapy",
+    "evdspy",
+]
+phase3-output = [
+    "gspread>=5.0",
+]
+phase5-excel = [
+    "openpyxl>=3.1",
+]
+enhanced = [
+    "google-genai>=1.0",
+    "optuna>=3.5",
+]
+dashboard = [
+    "streamlit>=1.36",
+    "plotly>=5.18",
+]
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+bist = "bist_picker.cli:cli"
+bist-api = "bist_picker.api.app:run"
+
+[tool.setuptools.packages.find]
+include = ["bist_picker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["bist_picker/tests", "tests"]
