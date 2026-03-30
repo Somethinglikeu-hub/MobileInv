@@ -1,0 +1,48 @@
+# BIST Stock Picker — General Settings
+
+database:
+  path: "data/bist_picker.db"
+
+rate_limits:
+  default_delay_sec: 1.0
+  isyatirim_delay_sec: 1.0
+  kap_delay_sec: 2.0
+  tcmb_delay_sec: 1.0
+  yahoo_delay_sec: 0.5
+
+cache:
+  directory: "data/cache"
+  ttl_hours:
+    prices: 24
+    financials: 168       # 7 days
+    company_list: 168     # 7 days
+    macro: 24
+    insider: 72           # 3 days
+  max_age_days: 30
+
+api_endpoints:
+  isyatirim_prices: "https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/HisseTekil"
+  isyatirim_financials: "https://www.isyatirim.com.tr/_layouts/15/Isyatirim.Website/Common/Data.aspx/MaliTablo"
+  kap_company_list: "https://www.kap.org.tr/tr/bist-sirketler"
+  tcmb_evds: "https://evds2.tcmb.gov.tr/service/evds"
+
+tcmb:
+  api_key: ""             # Prefer TCMB_API_KEY env var (keep empty in shared config)
+  cpi_series: "TP.FG.J0"
+  usdtry_series: "TP.DK.USD.A"
+  eurtry_series: "TP.DK.EUR.A"
+  policy_rate_series: "TP.APIFON4"
+
+logging:
+  console_level: "INFO"
+  file_level: "DEBUG"
+  log_dir: "logs"
+  log_file: "bist_picker.log"
+
+fetch:
+  price_history_days: 730   # ~2 years
+  insider_history_days: 180
+  validation_sample_pct: 0.10  # validate 10% of prices against Yahoo
+
+gemini:
+  api_key: ""               # Prefer GEMINI_API_KEY env var or APIKEY_FOLDER/gemini_api_key.txt

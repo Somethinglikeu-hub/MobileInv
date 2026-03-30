@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bist-picker"
 version = "0.1.0"
-description = "BIST Stock Picker â€” Buffett-style fundamental analysis for Borsa Istanbul"
+description = "BIST Stock Picker — Buffett-style fundamental analysis for Borsa Istanbul"
 requires-python = ">=3.11"
 dependencies = [
     "SQLAlchemy>=2.0",

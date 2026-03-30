@@ -1,0 +1,274 @@
+# BIST Stock Picker — Threshold Values for Scoring and Filtering
+
+buffett:
+  min_roe_5yr: 0.15
+  max_debt_equity: 1.0         # relaxed for Turkey
+  min_gross_margin: 0.25       # relaxed from 0.40 for Turkey
+  min_positive_eps_years: 6    # relaxed from 8 for emerging market
+  roe_full_score: 0.25         # ROE >= 25% gets maximum score
+  roe_min_score: 0.05          # ROE below 5% gets zero
+  debt_equity_ideal: 0.3       # D/E < 0.3 gets full score
+  debt_equity_max: 2.0         # D/E > 2.0 gets zero
+
+graham:
+  max_pe_pb_product: 22.5
+  margin_of_safety: 0.25
+  try_bond_yield: 0.30         # TRY 10-year govt bond yield proxy
+
+dcf:
+  discount_rate_try: 0.35
+  terminal_growth_try: 0.12    # ~3% real + ~9% long-run inflation
+  projection_years: 10
+  maintenance_capex_pct: 0.70  # approximate maintenance as 70% of total capex
+  min_growth_rate: 0.05        # floor: inflation pass-through minimum (~CPI floor)
+  max_growth_rate: 0.35        # matches discount rate; realistic for Turkish nominal growth
+  conservative_growth_rate: 0.10  # used when only 1 year of EPS history exists
+
+piotroski:
+  min_fscore: 4                # minimum to be considered investable
+
+selection:
+  max_correlation: 0.85        # max pairwise correlation between portfolio picks
+  correlation_lookback_days: 120  # days of return history for correlation check
+  max_target_multiple: 2.5     # cap: target <= entry * 2.5 (150% upside)
+  target_count: 3
+  max_per_sector: 2
+  max_banks_per_portfolio: 1
+  min_fscore: 4
+  min_data_completeness: 60.0
+  turnover_top_n: 10
+  turnover_threshold: 0.15     # keep if within 15% of top scorer
+  max_monthly_turnover: 0.50
+  stop_loss_pct: 0.18
+  min_technical_score: 35.0
+
+magic_formula:
+  min_market_cap_try: 500_000_000  # ₺500M minimum
+
+risk_tiers:
+  high:
+    min_volatility: 0.35
+    min_beta: 1.2
+  medium:
+    volatility_range: [0.20, 0.35]
+    beta_range: [0.8, 1.2]
+  low:
+    max_volatility: 0.20
+    max_beta: 0.8
+
+filters:
+  alpha:
+    exclude_high_risk: true
+    min_free_float: 25.0
+    min_avg_volume_try: 10_000_000
+    min_data_completeness: 70.0
+    min_fscore: 5
+  beta:
+    risk_tier: MEDIUM
+    ipo_eligible: true
+    min_free_float: 25.0
+    min_avg_volume_try: 10_000_000
+    min_data_completeness: 60.0
+    min_fscore: 3
+  delta:
+    bist100_only: true
+    min_free_float: 30.0
+    min_avg_volume_try: 25_000_000
+    min_data_completeness: 60.0
+    min_fscore: 3
+
+alpha_research:
+  quality_shadow_raw_fscore: 4
+  free_float_shadow_min: 15.0
+  free_float_shadow_alpha_min: 85.0
+  scenario_relaxed_operating_fscore: 4
+
+selection_legacy_disabled:
+  target_count: 3
+  max_per_sector: 2
+  max_banks_per_portfolio: 1
+  min_fscore: 4
+  min_data_completeness: 0.60
+  turnover_top_n: 10
+  turnover_threshold: 0.15     # keep if within 15% of top scorer
+  max_monthly_turnover: 0.50
+  stop_loss_pct: 0.18          # entry × 0.82
+  max_target_multiple: 2.5     # cap target price at 2.5× entry (150% upside max)
+  min_technical_score: 35.0    # momentum confirms the idea; it should not rescue weak trends
+
+banking:
+  # Blend ratio: 60% absolute thresholds + 40% peer ranking
+  absolute_weight: 0.60
+  peer_weight: 0.40
+
+  # Absolute threshold ranges for linear interpolation (floor→0, ceiling→100)
+  absolute_thresholds:
+    pb_vs_sector:                  # P/B ratio — lower is better
+      floor: 3.0                   # P/B >= 3.0 → score 0
+      ceiling: 0.5                 # P/B <= 0.5 → score 100
+      direction: lower             # lower raw value = better
+
+    roe:                           # Return on Equity
+      floor: 0.05                  # ROE <= 5% → score 0
+      ceiling: 0.25                # ROE >= 25% → score 100
+      direction: higher
+
+    car:                           # Capital Adequacy Ratio
+      floor: 0.12                  # CAR <= 12% → score 0
+      ceiling: 0.18                # CAR >= 18% → score 100
+      direction: higher
+
+    npl_ratio:                     # Non-Performing Loans ratio — lower is better
+      floor: 0.10                  # NPL >= 10% → score 0
+      ceiling: 0.02                # NPL <= 2% → score 100
+      direction: lower
+
+    cost_income:                   # Cost/Income ratio — lower is better
+      floor: 0.65                  # C/I >= 65% → score 0
+      ceiling: 0.35                # C/I <= 35% → score 100
+      direction: lower
+
+    nim:                           # Net Interest Margin
+      floor: 0.01                  # NIM <= 1% → score 0
+      ceiling: 0.05                # NIM >= 5% → score 100
+      direction: higher
+
+    loan_growth:                   # YoY loan growth
+      floor: -0.10                 # Growth <= -10% → score 0
+      ceiling: 0.30                # Growth >= 30% → score 100
+      direction: higher
+
+  # Legacy thresholds (kept for reference / other consumers)
+  car_minimum: 0.12
+  car_good: 0.15
+  nim_weak: 0.02
+  nim_strong: 0.05
+  npl_good: 0.02
+  npl_distressed: 0.10
+  cost_income_efficient: 0.40
+  cost_income_poor: 0.65
+  ldr_conservative: 0.90
+  ldr_aggressive: 1.20
+
+technical:
+  # Component weights (must sum to 1.0)
+  weight_ma: 0.50              # price vs 200-day MA — most important trend signal
+  weight_rsi: 0.30             # RSI zone — entry quality
+  weight_vol: 0.20             # volume trend — conviction confirmation
+
+  # RSI thresholds
+  rsi_oversold: 30.0           # RSI below this = oversold (signal = 0.5)
+  rsi_overbought: 70.0         # RSI above this = overbought (signal = 0.0)
+
+  # Volume ratio thresholds (20-day avg / 60-day avg)
+  vol_rising_threshold: 1.10   # ratio >= 1.10 = rising interest (signal = 1.0)
+  vol_flat_lo_threshold: 0.90  # ratio < 0.90  = fading interest (signal = 0.0)
+
+  # Minimum rows required for each component
+  min_rows_200ma: 200          # trading days for the moving average
+  min_rows_rsi: 15             # minimum changes needed for RSI
+  min_rows_volume: 60          # trading days for volume trend
+
+technical_enhanced:
+  # Master toggle for enhanced indicators (5 new indicators: MACD, Bollinger, ADX, OBV, S/R)
+  enabled: false               # Start disabled for safety, set true to enable blended scoring
+
+  # Blending weights (must sum to 1.0)
+  classic_weight: 0.60         # Weight for classic 3 signals (MA, RSI, Volume)
+  enhanced_weight: 0.40        # Weight for enhanced 5 signals (MACD, BB, ADX, OBV, S/R)
+
+  # Enhanced signal component weights (must sum to 1.0)
+  weight_macd: 0.25            # MACD crossover and position
+  weight_bollinger: 0.20       # Bollinger Band position
+  weight_adx: 0.20             # Trend strength (ADX)
+  weight_obv: 0.20             # On-Balance Volume trend
+  weight_support_resistance: 0.15  # Support/Resistance proximity
+
+  # MACD parameters (Moving Average Convergence Divergence)
+  macd_ema_short: 12           # Fast EMA period
+  macd_ema_long: 26            # Slow EMA period
+  macd_signal: 9               # Signal line EMA period
+  min_rows_macd: 35            # Minimum data requirement (26 + 9)
+
+  # Bollinger Bands parameters
+  bb_period: 20                # SMA period for middle band
+  bb_std_dev: 2.0              # Standard deviation multiplier for upper/lower bands
+  bb_middle_pct: 0.50          # Middle 50% of band width gets signal 1.0
+  min_rows_bb: 20              # Minimum data requirement
+
+  # ADX parameters (Average Directional Index)
+  adx_period: 14               # Directional movement period
+  adx_strong: 25.0             # ADX > 25 = strong trend (signal 1.0)
+  adx_developing: 20.0         # ADX 20-25 = developing trend (signal 0.5)
+  min_rows_adx: 28             # Minimum data requirement (14 + 14 for smoothing)
+
+  # OBV parameters (On-Balance Volume)
+  obv_short_period: 20         # Short-term slope calculation period
+  obv_long_period: 60          # Long-term slope calculation period
+  obv_rising_threshold: 0.10   # Slope > 0.10 = rising interest (signal 1.0)
+  obv_flat_threshold: -0.05    # Slope < -0.05 = falling interest (signal 0.0)
+  min_rows_obv: 60             # Minimum data requirement
+
+  # Support/Resistance parameters
+  sr_lookback_days: 252        # 1-year window for 52-week high/low
+  sr_resistance_zone: 0.95     # Top 5% of range = at resistance (signal 0.0)
+  sr_upper_zone: 0.75          # Top 25% of range = upper zone (signal 0.5)
+  min_rows_sr: 252             # Minimum data requirement (1 year)
+
+insider:
+  lookback_3m_days: 91            # calendar days for the 3-month window
+  lookback_6m_days: 182           # calendar days for the 6-month window
+  weight_3m: 0.60                 # weight for 3-month signal (more timely)
+  weight_6m: 0.40                 # weight for 6-month signal
+  min_market_cap_for_pct: 100_000_000  # 100M TRY minimum to use % normalisation
+  role_weights:
+    BOARD: 1.0                    # board members — highest conviction
+    CEO: 1.0                      # CEO — highest conviction
+    MAJOR_SHAREHOLDER: 0.8        # large holders — informative but may hedge
+    RELATED: 0.5                  # family/related — lower weight
+    OTHER: 0.5                    # unknown/other roles — conservative default
+
+quality_flags:
+  late_filing_days: 75         # flag if publication_date > period_end + 75 days
+  high_related_party_pct: 0.25 # flag if related party revenue > 25%
+  price_divergence_pct: 0.02   # flag if Is Yatirim vs Yahoo > 2%
+
+risk_classifier:
+  # Weights per dimension (must sum to 1.0)
+  weights:
+    volatility: 0.25
+    beta: 0.25
+    market_cap: 0.20
+    liquidity: 0.15
+    leverage: 0.15
+
+  # Volatility: 252-day annualized std dev of log-returns
+  volatility:
+    low_max: 0.20              # annualized vol < 20% -> LOW risk
+    high_min: 0.35             # annualized vol > 35% -> HIGH risk
+
+  # Beta vs BIST-100 over trailing 252 trading days
+  beta:
+    low_max: 0.80              # beta < 0.8 -> LOW risk
+    high_min: 1.20             # beta > 1.2 -> HIGH risk
+
+  # Market capitalization in TRY
+  market_cap:
+    large_min: 10_000_000_000  # > 10B TRY -> LARGE (LOW risk)
+    small_max: 2_000_000_000   # < 2B TRY  -> SMALL (HIGH risk)
+
+  # 20-day average daily TRY turnover.
+  # ISYATIRIM rows already store TRY turnover; YAHOO rows use close * volume.
+  liquidity:
+    high_min: 25_000_000       # avg turnover > 25M TRY -> HIGH liquidity (LOW risk)
+    low_max: 5_000_000         # avg turnover < 5M TRY  -> LOW liquidity (HIGH risk)
+
+  # Debt / Equity ratio from most recent annual balance sheet
+  leverage:
+    low_max: 0.50              # D/E < 0.5 -> LOW risk
+    high_min: 1.50             # D/E > 1.5 -> HIGH risk
+
+  # Composite score thresholds (weighted sum of dimension scores 1-3)
+  composite:
+    low_max: 1.50              # composite <= 1.5 -> LOW risk tier
+    high_min: 2.20             # composite > 2.2  -> HIGH risk tier

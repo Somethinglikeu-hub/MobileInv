@@ -1,0 +1,108 @@
+# Portfolio-specific weights for Operating Companies
+alpha:
+  quality_buffett: 0.15
+  value_graham_dcf: 0.30
+  piotroski: 0.15
+  growth: 0.10
+  momentum: 0.25
+  insider: 0.00
+  technical: 0.05
+  dividend_yield: 0.00
+
+beta:
+  quality_buffett: 0.10
+  value_graham_dcf: 0.10
+  piotroski: 0.10
+  growth: 0.35
+  momentum: 0.25
+  insider: 0.00
+  technical: 0.10
+  dividend_yield: 0.00
+
+delta:
+  quality_buffett: 0.10
+  value_graham_dcf: 0.10
+  piotroski: 0.05
+  growth: 0.35
+  momentum: 0.20
+  insider: 0.00
+  technical: 0.20
+  dividend_yield: 0.00
+
+# Model-specific overrides (applied to all portfolios for these company types)
+holding:
+  nav_discount: 0.35
+  portfolio_quality: 0.25
+  dividend_yield: 0.20
+  governance: 0.20
+
+banking:
+  pb_vs_sector: 0.20
+  roe: 0.20
+  car: 0.15
+  npl_ratio: 0.10
+  cost_income: 0.10
+  nim: 0.15
+  loan_growth: 0.10
+
+reit:
+  pb_vs_sector: 0.35
+  dividend_yield: 0.25
+  roe: 0.20
+  net_margin: 0.10
+  debt_equity: 0.10
+
+ipo:
+  revenue_growth: 0.30
+  gross_margin_vs_sector: 0.20
+  ps_ratio_vs_sector: 0.20
+  insider_retention: 0.15
+  liquidity: 0.15
+
+# Enhanced Pipeline weights (V2.5) - blend classic + enhanced factors
+enhanced_alpha:
+  classic_weight: 0.70      # 70% classic composite
+  enhanced_weight: 0.30     # 30% enhanced signals
+  event_score: 0.35
+  insider_cluster: 0.30
+  macro_nowcast: 0.20
+  analyst_tone: 0.15
+
+enhanced_beta:
+  classic_weight: 0.65
+  enhanced_weight: 0.35
+  event_score: 0.30
+  insider_cluster: 0.25
+  macro_nowcast: 0.25
+  analyst_tone: 0.20
+
+enhanced_delta:
+  classic_weight: 0.60
+  enhanced_weight: 0.40
+  event_score: 0.25
+  insider_cluster: 0.25
+  macro_nowcast: 0.30
+  analyst_tone: 0.20
+
+regime_weights:
+  BULL_LOW_VOL: # Aggressive Rally
+    quality_buffett: 0.05
+    value_graham_dcf: 0.05
+    piotroski: 0.10
+    growth: 0.30
+    momentum: 0.30
+    technical: 0.20
+  BULL_HIGH_VOL: # Volatile Trend
+    quality_buffett: 0.20
+    value_graham_dcf: 0.10
+    piotroski: 0.10
+    growth: 0.20
+    momentum: 0.20
+    technical: 0.20
+  BEAR: # Defensive Recovery
+    quality_buffett: 0.30
+    value_graham_dcf: 0.20
+    piotroski: 0.10
+    growth: 0.10
+    momentum: 0.00
+    technical: 0.30

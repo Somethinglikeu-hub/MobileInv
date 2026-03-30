@@ -1,0 +1,121 @@
+# Enhanced pipeline configuration for BIST Stock Picker V2.5
+
+llm:
+  provider: gemini
+  model: gemini-2.5-flash
+  api_key_env: GEMINI_API_KEY   # Read from env var, falls back to settings.yaml
+  max_requests_per_day: 1400    # Stay under 1500 free tier limit
+  retry_attempts: 3
+  timeout_seconds: 30
+  cost_tracking: true
+
+# System prompts for structured LLM calls
+prompts:
+  kap_event: |
+    You are a financial data extraction engine for Turkish stock market
+    disclosures from KAP (Kamuyu Aydinlatma Platformu). Analyze the
+    following disclosure text and return ONLY a valid JSON object with
+    no additional text, no markdown, no explanations.
+
+    Required JSON fields:
+    - event_type: One of [NEW_CONTRACT, DIVIDEND, SHARE_BUYBACK,
+      CAPITAL_INCREASE, LAWSUIT, PENALTY, BOARD_CHANGE,
+      MERGER_ACQUISITION, CAPACITY_EXPANSION, RATING_CHANGE,
+      PARTNERSHIP, ASSET_SALE, DEBT_ISSUANCE, OTHER]
+    - sentiment: Float from -1.0 (very negative) to 1.0 (very positive)
+    - monetary_value: Numeric value of the deal/contract/transaction
+      in the original currency. Use null if not mentioned.
+    - currency: Currency code (TRY, USD, EUR). Use null if not mentioned.
+    - counterparty: Name of the other party. Use null if not mentioned.
+    - duration_months: Duration of contract in months. Use null if not applicable.
+    - confidence: Your confidence in this extraction, 0.0 to 1.0.
+    - summary: One-sentence English summary of the event.
+
+  analyst_tone: |
+    You are a financial sentiment analyzer for Turkish stock market
+    analyst reports. Score the forward-looking tone of this report
+    about a Turkish listed company. Return ONLY a valid JSON object
+    with no additional text.
+
+    Required JSON fields:
+    - tone_score: Float from 1.0 (very pessimistic) to 10.0 (very optimistic)
+    - key_themes: List of up to 3 themes from [revenue_growth, margin_expansion,
+      market_share, new_products, cost_reduction, debt_reduction,
+      currency_risk, competition, regulatory_risk, macro_headwinds]
+    - risk_flags: List of identified risks (free text, max 3)
+    - target_price_mentioned: Numeric target price if mentioned, else null
+    - recommendation: One of [STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL, null]
+    - confidence: Your confidence 0.0 to 1.0
+
+  macro_headlines: |
+    You are a Turkish financial markets macro analyst. Analyze these
+    financial headlines from today and classify the overall macro
+    sentiment for Borsa Istanbul. Return ONLY a valid JSON object.
+
+    Required JSON fields:
+    - macro_sentiment: One of [BULLISH, CAUTIOUS, BEARISH, NEUTRAL]
+    - key_drivers: List of up to 3 drivers (free text)
+    - sector_impacts: Object mapping BIST sector names to impact
+      scores from -1.0 to 1.0. Use Turkish sector codes:
+      XBANK (banking), XUTEK (technology), XGMYO (REIT),
+      XELKT (electricity), XSGRT (insurance), XTRZM (tourism),
+      XGIDA (food), XUSIN (industrials), XUHIZ (services),
+      XULAS (transport), XTCRT (retail)
+    - confidence: Your confidence 0.0 to 1.0
+
+  stock_report: |
+    You are a senior equity analyst covering Borsa Istanbul (BIST).
+    Write a concise investment report for the stock described below.
+    The report is for an individual investor using a quantitative
+    stock-picking system. Return ONLY a valid JSON object.
+
+    Required JSON fields:
+    - thesis: 2-3 sentence investment thesis explaining WHY this stock
+      was selected and its key strengths. Be specific about the numbers.
+    - risks: List of 2-4 key risks (each a short sentence). Consider:
+      sector headwinds, valuation stretch, governance, FX exposure,
+      high debt, margin pressure, earnings quality, liquidity.
+    - outlook: 1-2 sentence forward-looking view. What could go right
+      or wrong in the next 3-6 months?
+    - verdict: One of [STRONG_CONVICTION, CONVICTION, MODERATE, CAUTIOUS]
+      based on the overall risk/reward balance.
+    - score_out_of_10: Float 1.0-10.0 rating for overall attractiveness.
+
+    Important rules:
+    - Use plain English, no jargon. Be direct and honest.
+    - If data is missing or incomplete, say so in the risks.
+    - If the stock looks risky despite a high score, flag it clearly.
+    - Focus on what matters: profitability, growth, valuation, cash flow.
+    - Keep total response under 250 words.
+
+# Event type scoring weights (how much each event type affects the score)
+event_weights:
+  NEW_CONTRACT: 1.0
+  CAPACITY_EXPANSION: 0.9
+  MERGER_ACQUISITION: 0.8
+  PARTNERSHIP: 0.7
+  DIVIDEND: 0.6
+  SHARE_BUYBACK: 0.7
+  RATING_CHANGE: 0.5
+  ASSET_SALE: 0.4
+  CAPITAL_INCREASE: 0.3     # dilutive, can be negative
+  DEBT_ISSUANCE: 0.3
+  BOARD_CHANGE: 0.2
+  PENALTY: 0.1              # usually already priced in
+  LAWSUIT: 0.1              # usually already priced in
+  OTHER: 0.3
+
+# Sector classification for asymmetric event scoring
+# Event-driven sectors respond more to KAP news
+event_driven_sectors:
+  - XUBIL   # Technology
+  - XUHIZ   # Services
+  - XTCRT   # Retail
+  - XULAS   # Transport
+  - XTRZM   # Tourism
+
+# Commodity/macro-driven sectors - KAP news less predictive
+macro_driven_sectors:
+  - XELKT   # Electricity
+  - XMANA   # Mining
+  - XKMYA   # Chemicals

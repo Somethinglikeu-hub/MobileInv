@@ -1,0 +1,10 @@
+# BIST Stock Picker — Manually Excluded Tickers
+# Tickers listed here are excluded from all portfolio selections.
+# Each entry requires a reason.
+
+excluded_tickers: {}
+  # Example:
+  # TICKER:
+  #   reason: "Reason for exclusion"
+  #   excluded_since: "2026-01-01"
+  #   exclude_from: "all"  # or "alpha", "beta", "delta"
