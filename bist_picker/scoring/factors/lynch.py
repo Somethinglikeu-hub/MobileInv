@@ -200,7 +200,7 @@ class LynchScorer:
         metrics: list[AdjustedMetric],
         company_id: int,
         session: Session,
-        scoring_date: Optional[date],
+        scoring_date: Optional[_date],
         scoring_context: Any,
     ) -> str:
         """Classify using context data."""
