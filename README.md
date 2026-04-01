@@ -9,7 +9,7 @@ Cloud pipeline and public mobile feed for the BIST Picker Android app.
 - Publishes `manifest.json` and `mobile_snapshot.db.gz` to `MobileInv-feed`
 - Feeds the Android app from a raw GitHub URL without requiring a PC
 
-## Required Repository Variables
+## Repository Variables
 
 - `BIST_STATE_REPOSITORY`
   Example: `Somethinglikeu-hub/MobileInv-state`
@@ -19,6 +19,10 @@ Cloud pipeline and public mobile feed for the BIST Picker Android app.
   Optional. Defaults to `main`.
 - `BIST_FEED_BRANCH`
   Optional. Defaults to `gh-pages`.
+
+`BIST_STATE_REPOSITORY` and `BIST_FEED_REPOSITORY` are optional. When they are not set,
+the workflow falls back to `Somethinglikeu-hub/MobileInv-state` and
+`Somethinglikeu-hub/MobileInv-feed` under the current repository owner.
 
 ## Required Repository Secrets
 

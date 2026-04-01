@@ -3,6 +3,7 @@ name: Publish Mobile Feed
 on:
   workflow_dispatch:
   schedule:
+    - cron: "17 6 * * 1-5"
     - cron: "17 16 * * 1-5"
 
 concurrency:
@@ -17,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      STATE_REPOSITORY: ${{ vars.BIST_STATE_REPOSITORY }}
-      FEED_REPOSITORY: ${{ vars.BIST_FEED_REPOSITORY }}
+      STATE_REPOSITORY: ${{ vars.BIST_STATE_REPOSITORY || format('{0}/MobileInv-state', github.repository_owner) }}
+      FEED_REPOSITORY: ${{ vars.BIST_FEED_REPOSITORY || format('{0}/MobileInv-feed', github.repository_owner) }}
       STATE_BRANCH: ${{ vars.BIST_STATE_BRANCH || 'main' }}
       FEED_BRANCH: ${{ vars.BIST_FEED_BRANCH || 'gh-pages' }}
       TCMB_API_KEY: ${{ secrets.TCMB_API_KEY }}
@@ -35,16 +36,19 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          required = [
-              "STATE_REPOSITORY",
-              "FEED_REPOSITORY",
-              "PUBLISH_REPO_TOKEN",
-          ]
-          missing = [name for name in required if not os.environ.get(name)]
-          if missing:
-              raise SystemExit(
-                  "Missing workflow vars/secrets: " + ", ".join(sorted(missing))
-              )
+          state_repository = os.environ.get("STATE_REPOSITORY")
+          feed_repository = os.environ.get("FEED_REPOSITORY")
+          publish_repo_token = os.environ.get("PUBLISH_REPO_TOKEN")
+
+          if not state_repository:
+              raise SystemExit("STATE_REPOSITORY could not be derived.")
+          if not feed_repository:
+              raise SystemExit("FEED_REPOSITORY could not be derived.")
+          if not publish_repo_token:
+              raise SystemExit("Missing workflow secret: PUBLISH_REPO_TOKEN")
+
+          print(f"Using STATE_REPOSITORY={state_repository}")
+          print(f"Using FEED_REPOSITORY={feed_repository}")
           PY
 
       - name: Derive raw GitHub feed URL
