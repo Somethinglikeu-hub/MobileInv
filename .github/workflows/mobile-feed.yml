@@ -75,16 +75,16 @@ jobs:
           cd ..
           mkdir -p data
           if [ -f "state-repo/state/current/bist_picker.db.gz" ]; then
-            python - <<'PY'
-            import gzip
-            import shutil
-            from pathlib import Path
+          python - <<'PY'
+          import gzip
+          import shutil
+          from pathlib import Path
 
-            source = Path("state-repo/state/current/bist_picker.db.gz")
-            target = Path("data/bist_picker.db")
-            with gzip.open(source, "rb") as input_file, target.open("wb") as output_file:
-                shutil.copyfileobj(input_file, output_file)
-            PY
+          source = Path("state-repo/state/current/bist_picker.db.gz")
+          target = Path("data/bist_picker.db")
+          with gzip.open(source, "rb") as input_file, target.open("wb") as output_file:
+              shutil.copyfileobj(input_file, output_file)
+          PY
           fi
 
       - name: Run pipeline and export mobile feed
