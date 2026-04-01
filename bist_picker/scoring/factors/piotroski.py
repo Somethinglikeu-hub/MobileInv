@@ -29,7 +29,7 @@ import json
 import logging
 from datetime import date as _date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 from sqlalchemy.orm import Session
