@@ -210,7 +210,14 @@ def get_portfolio_performance(portfolio_name: str) -> dict:
     """
     session = _get_session()
     try:
-        from bist_picker.output.performance import PerformanceTracker
+        try:
+            from bist_picker.output.performance import PerformanceTracker
+        except ModuleNotFoundError:
+            logger.warning(
+                "Legacy PerformanceTracker module is unavailable; using read_service fallback."
+            )
+            return _calculate_portfolio_performance_fallback(session, portfolio_name)
+
         tracker = PerformanceTracker(session)
         return tracker.calculate_portfolio_performance(portfolio_name)
     finally:
@@ -221,7 +228,13 @@ def get_all_portfolio_performance() -> dict:
     """Get performance for all portfolios combined."""
     session = _get_session()
     try:
-        from bist_picker.output.performance import PerformanceTracker
+        try:
+            from bist_picker.output.performance import PerformanceTracker
+        except ModuleNotFoundError:
+            result = _calculate_portfolio_performance_fallback(session, "ALPHA")
+            result["benchmark_ytd"] = None
+            return result
+
         tracker = PerformanceTracker(session)
         result = tracker.calculate_portfolio_performance("ALPHA")
         result["benchmark_ytd"] = tracker.fetch_benchmark_performance()
@@ -1506,3 +1519,71 @@ def _latest_prices(session: Session, company_ids: list[int]) -> dict[int, float]
         }
     )
     return prices
+
+
+def _calculate_portfolio_performance_fallback(
+    session: Session,
+    portfolio_name: str,
+) -> dict:
+    """Compute lightweight portfolio metrics when the legacy output module is absent."""
+    rows = (
+        session.query(PortfolioSelection)
+        .filter(PortfolioSelection.portfolio == portfolio_name.upper())
+        .all()
+    )
+    if not rows:
+        return {
+            "total_return_avg": None,
+            "active_return_avg": None,
+            "win_rate": None,
+        }
+
+    open_company_ids = [
+        row.company_id
+        for row in rows
+        if row.exit_date is None and row.company_id is not None
+    ]
+    latest_prices = _latest_prices(session, open_company_ids)
+
+    total_returns: list[float] = []
+    active_returns: list[float] = []
+
+    for row in rows:
+        return_pct = row.return_pct
+        if return_pct is None and row.entry_price and row.entry_price > 0:
+            if row.exit_price is not None:
+                return_pct = ((row.exit_price - row.entry_price) / row.entry_price) * 100.0
+            elif row.exit_date is None:
+                current_price = latest_prices.get(row.company_id)
+                if current_price is not None:
+                    return_pct = ((current_price - row.entry_price) / row.entry_price) * 100.0
+
+        if return_pct is None:
+            continue
+
+        normalized_return = float(return_pct)
+        total_returns.append(normalized_return)
+        if row.exit_date is None:
+            active_returns.append(normalized_return)
+
+    total_return_avg = (
+        sum(total_returns) / len(total_returns)
+        if total_returns
+        else None
+    )
+    active_return_avg = (
+        sum(active_returns) / len(active_returns)
+        if active_returns
+        else total_return_avg
+    )
+    win_rate = (
+        (sum(1 for value in total_returns if value > 0) / len(total_returns)) * 100.0
+        if total_returns
+        else None
+    )
+
+    return {
+        "total_return_avg": total_return_avg,
+        "active_return_avg": active_return_avg,
+        "win_rate": win_rate,
+    }

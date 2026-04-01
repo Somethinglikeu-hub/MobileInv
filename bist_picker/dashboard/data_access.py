@@ -8,6 +8,8 @@ import bist_picker.read_service as read_service
 from bist_picker.db.connection import get_engine
 
 CACHE_TTL = read_service.CACHE_TTL
+_shared_get_engine = read_service.get_engine
+_last_synced_get_engine = _shared_get_engine
 
 _shared_load_latest_macro = read_service._load_latest_macro
 _shared_get_open_positions = read_service.get_open_positions
@@ -35,7 +37,10 @@ _shared_get_all_tickers = read_service.get_all_tickers
 
 def _sync_shared_dependencies() -> None:
     """Keep the shared module aligned with Streamlit-side monkeypatches."""
-    read_service.get_engine = get_engine
+    global _last_synced_get_engine
+    if read_service.get_engine in {_shared_get_engine, _last_synced_get_engine}:
+        read_service.get_engine = get_engine
+        _last_synced_get_engine = get_engine
     read_service.get_latest_scoring_date = get_latest_scoring_date
     read_service.get_alpha_eligible_company_ids = get_alpha_eligible_company_ids
     read_service.get_alpha_eligibility_reasons = get_alpha_eligibility_reasons

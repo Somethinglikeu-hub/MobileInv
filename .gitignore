@@ -3,13 +3,13 @@
 __pycache__/
 *.py[cod]
 
-APIKEY_FOLDER/
-data/
-logs/
-output/
-mobile-feed-dist/
-state-repo/
-feed-repo/
+/APIKEY_FOLDER/
+/data/
+/logs/
+/output/
+/mobile-feed-dist/
+/state-repo/
+/feed-repo/
 
 .DS_Store
 Thumbs.db
