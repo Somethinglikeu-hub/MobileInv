@@ -470,7 +470,7 @@ class PiotroskiScorer:
 
     # ---- Context helpers ----
 
-    def _find_stmt_data(self, stmts: list, period_end: date, stmt_type: str) -> dict:
+    def _find_stmt_data(self, stmts: list, period_end: _date, stmt_type: str) -> dict:
         """Find statement for specific date and extract relevant fields."""
         if not stmts:
             return {}
@@ -501,7 +501,7 @@ class PiotroskiScorer:
             }
         return {}
 
-    def _find_stmt_item(self, stmts: list, period_end: date, codes: list) -> Optional[float]:
+    def _find_stmt_item(self, stmts: list, period_end: _date, codes: list) -> Optional[float]:
         """Find statement and extract single item."""
         if not stmts:
             return None
