@@ -1,11 +1,12 @@
 # Portfolio-specific weights for Operating Companies
+# NOTE: `insider` factor removed — no reliable data source for BIST.
+# Its old weight (always 0.00) has been redistributed where sensible; totals still sum to 1.0.
 alpha:
   quality_buffett: 0.15
   value_graham_dcf: 0.30
   piotroski: 0.15
   growth: 0.10
   momentum: 0.25
-  insider: 0.00
   technical: 0.05
   dividend_yield: 0.00
 
@@ -15,7 +16,6 @@ beta:
   piotroski: 0.10
   growth: 0.35
   momentum: 0.25
-  insider: 0.00
   technical: 0.10
   dividend_yield: 0.00
 
@@ -25,7 +25,6 @@ delta:
   piotroski: 0.05
   growth: 0.35
   momentum: 0.20
-  insider: 0.00
   technical: 0.20
   dividend_yield: 0.00
 
@@ -59,31 +58,36 @@ ipo:
   insider_retention: 0.15
   liquidity: 0.15
 
-# Enhanced Pipeline weights (V2.5) - blend classic + enhanced factors
+# Enhanced Pipeline weights (V2.5) - currently NOT wired into the active composer.
+# ``insider_cluster`` was removed together with the classic insider factor because
+# BIST does not expose a reliable insider-transaction feed; its weight has been
+# redistributed across event_score / macro_nowcast / analyst_tone.
 enhanced_alpha:
-  classic_weight: 0.70      # 70% classic composite
-  enhanced_weight: 0.30     # 30% enhanced signals
-  event_score: 0.35
-  insider_cluster: 0.30
-  macro_nowcast: 0.20
-  analyst_tone: 0.15
+  classic_weight: 0.70
+  enhanced_weight: 0.30
+  event_score: 0.50
+  macro_nowcast: 0.30
+  analyst_tone: 0.20
 
 enhanced_beta:
   classic_weight: 0.65
   enhanced_weight: 0.35
-  event_score: 0.30
-  insider_cluster: 0.25
-  macro_nowcast: 0.25
-  analyst_tone: 0.20
+  event_score: 0.40
+  macro_nowcast: 0.35
+  analyst_tone: 0.25
 
 enhanced_delta:
   classic_weight: 0.60
   enhanced_weight: 0.40
-  event_score: 0.25
-  insider_cluster: 0.25
-  macro_nowcast: 0.30
-  analyst_tone: 0.20
+  event_score: 0.35
+  macro_nowcast: 0.40
+  analyst_tone: 0.25
 
+# Regime-dependent weight overrides for ALPHA / BETA / DELTA.
+# Each block must sum to 1.0 (validated at load time).
+# BEAR: keep momentum as a trend filter (avoids falling-knife bias); rely on
+# quality + value rather than technical indicators which generate false
+# reversal signals in downtrends.
 regime_weights:
   BULL_LOW_VOL: # Aggressive Rally
     quality_buffett: 0.05
@@ -99,10 +103,10 @@ regime_weights:
     growth: 0.20
     momentum: 0.20
     technical: 0.20
-  BEAR: # Defensive Recovery
+  BEAR: # Defensive Recovery — momentum kept as trend filter
     quality_buffett: 0.30
-    value_graham_dcf: 0.20
+    value_graham_dcf: 0.25
     piotroski: 0.10
-    growth: 0.10
-    momentum: 0.00
-    technical: 0.30
+    growth: 0.05
+    momentum: 0.15
+    technical: 0.15

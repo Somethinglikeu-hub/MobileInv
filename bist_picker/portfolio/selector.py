@@ -1,13 +1,13 @@
 """Portfolio selection module for the BIST Stock Picker.
 
-Implements the PortfolioSelector that picks 3 stocks per portfolio
-(ALPHA, BETA, DELTA) from the eligible universe with the following
-constraints and rules:
+Implements the PortfolioSelector that picks N stocks per portfolio
+(ALPHA, BETA, DELTA) from the eligible universe. ``N`` is read from
+``selection.target_count`` in thresholds.yaml (default 5).
 
   Constraints
   -----------
-  * Max 2 stocks from the same custom sub-sector
-  * Max 1 bank per portfolio
+  * Max ``selection.max_per_sector`` stocks from the same custom sub-sector
+  * Max ``selection.max_banks_per_portfolio`` banks per portfolio
 
   Turnover penalty
   ----------------
@@ -54,9 +54,9 @@ _PORTFOLIO_SCORE_COL: dict[str, str] = {
     "BETA": "composite_beta",
     "DELTA": "composite_delta",
 }
-_PICKS_PER_PORTFOLIO: int = 3
-_MAX_PER_SECTOR: int = 2
-_MAX_BANKS: int = 1
+_PICKS_PER_PORTFOLIO: int = 5
+_MAX_PER_SECTOR: int = 3
+_MAX_BANKS: int = 2
 _TOP_N_FOR_TURNOVER: int = 10       # Incumbents protected if still in top 10
 _TURNOVER_THRESHOLD: float = 1.15   # New candidate must be 15% better to replace
 _STOP_LOSS_FACTOR: float = 0.82     # stop_loss = entry_price * 0.82 (fallback)

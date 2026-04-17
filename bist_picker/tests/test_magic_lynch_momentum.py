@@ -619,7 +619,8 @@ class TestMomentumScorer:
         results = scorer.score_all(session)
         assert len(results) == 3
 
-        # All should have momentum_percentile
+        # Each entry carries a raw momentum_combined; percentile normalization
+        # is applied later by the composer, not the scorer.
         for cid, data in results.items():
-            assert "momentum_percentile" in data
-            assert 0.0 <= data["momentum_percentile"] <= 100.0
+            assert "momentum_combined" in data
+            assert data["momentum_combined"] is not None

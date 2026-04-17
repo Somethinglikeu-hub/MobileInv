@@ -58,7 +58,6 @@ _DB_COL_TO_FACTOR: dict[str, list[str]] = {
     "quality_buffett": ["buffett_score"],
     "piotroski": ["piotroski_fscore"],
     "momentum": ["momentum_score"],
-    "insider": ["insider_score"],
     "technical": ["technical_score"],
     # Composite mappings (averaged from multiple columns)
     "growth": ["magic_formula_rank", "lynch_peg_score"],
@@ -227,7 +226,6 @@ class ScoreComposer:
             "lynch_peg_score": row.lynch_peg_score,
             "dcf_margin_of_safety_pct": row.dcf_margin_of_safety_pct,
             "momentum_score": row.momentum_score,
-            "insider_score": row.insider_score,
             "technical_score": row.technical_score,
             "dividend_score": row.dividend_score,
         }

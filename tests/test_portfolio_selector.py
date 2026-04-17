@@ -193,23 +193,24 @@ class TestSectorConstraint:
         ), f"Sector constraint violated: {sector_counts}"
 
     def test_crowded_sector_causes_fallthrough_to_lower_scorers(self):
-        """When top 3 are in same sector, 3rd gets skipped and next eligible is picked."""
-        candidates = [
-            _make_candidate(1, "TOP1", score=100.0, sector="CROWDED"),
-            _make_candidate(2, "TOP2", score=99.0, sector="CROWDED"),
-            _make_candidate(3, "TOP3", score=98.0, sector="CROWDED"),  # should be skipped
-            _make_candidate(4, "ALT1", score=50.0, sector="SECTOR_B"),
-            _make_candidate(5, "ALT2", score=49.0, sector="SECTOR_C"),
-            _make_candidate(6, "ALT3", score=48.0, sector="SECTOR_D"),
-            _make_candidate(7, "ALT4", score=47.0, sector="SECTOR_E"),
+        """When top _MAX_PER_SECTOR+1 are in same sector, overflow gets skipped."""
+        # Build top (_MAX_PER_SECTOR + 1) candidates in CROWDED; the last must be skipped.
+        crowded = [
+            _make_candidate(i + 1, f"TOP{i + 1}", score=100.0 - i, sector="CROWDED")
+            for i in range(_MAX_PER_SECTOR + 1)
         ]
-        picks = _select(candidates)
+        alts = [
+            _make_candidate(100 + i, f"ALT{i + 1}", score=50.0 - i, sector=f"SECTOR_{i}")
+            for i in range(_PICKS_PER_PORTFOLIO)
+        ]
+        picks = _select(crowded + alts)
         tickers = [p["ticker"] for p in picks]
 
-        assert "TOP1" in tickers
-        assert "TOP2" in tickers
-        assert "TOP3" not in tickers      # skipped — CROWDED already at limit
-        assert "ALT1" in tickers          # fills slot instead
+        overflow_ticker = crowded[-1]["ticker"]
+        for c in crowded[:-1]:
+            assert c["ticker"] in tickers
+        assert overflow_ticker not in tickers       # over-limit in CROWDED
+        assert alts[0]["ticker"] in tickers         # fills slot instead
         assert len(picks) == _PICKS_PER_PORTFOLIO
 
 
@@ -234,22 +235,27 @@ class TestBankConstraint:
         )]
         assert len(bank_picks) <= _MAX_BANKS
 
-    def test_second_bank_replaced_by_operating_company(self):
-        """The second-best bank is skipped and an operating company fills the slot."""
-        candidates = [
-            _make_candidate(1, "BANK1", score=100.0, sector="BANKING", company_type="BANK"),
-            _make_candidate(2, "BANK2", score=99.0, sector="BANKING2", company_type="BANK"),
-            _make_candidate(3, "OP1", score=80.0, sector="RETAIL"),
-            _make_candidate(4, "OP2", score=79.0, sector="ENERGY"),
-            _make_candidate(5, "OP3", score=78.0, sector="TELECOM"),
-            _make_candidate(6, "OP4", score=77.0, sector="FOOD"),
+    def test_overflow_bank_replaced_by_operating_company(self):
+        """Banks above _MAX_BANKS are skipped; operating companies fill the slots."""
+        banks = [
+            _make_candidate(
+                i + 1, f"BANK{i + 1}", score=100.0 - i,
+                sector=f"BANKING{i + 1}", company_type="BANK",
+            )
+            for i in range(_MAX_BANKS + 1)
         ]
-        picks = _select(candidates)
+        ops = [
+            _make_candidate(100 + i, f"OP{i + 1}", score=80.0 - i, sector=f"OPS{i}")
+            for i in range(_PICKS_PER_PORTFOLIO)
+        ]
+        picks = _select(banks + ops)
         tickers = [p["ticker"] for p in picks]
 
-        assert "BANK1" in tickers
-        assert "BANK2" not in tickers
-        assert "OP1" in tickers
+        overflow_bank = banks[-1]["ticker"]
+        for b in banks[:-1]:
+            assert b["ticker"] in tickers
+        assert overflow_bank not in tickers
+        assert ops[0]["ticker"] in tickers
 
 
 # ── Test 4: Turnover penalty — incumbent retained ─────────────────────────────

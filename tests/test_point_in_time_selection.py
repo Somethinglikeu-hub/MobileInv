@@ -68,7 +68,7 @@ def test_selector_skips_candidates_without_price_history():
 
     picks = selector.select("ALPHA", session=None, current_holdings=None)
 
-    assert [pick["ticker"] for pick in picks] == ["GOOD2", "GOOD3", "GOOD4"]
+    assert [pick["ticker"] for pick in picks] == ["GOOD2", "GOOD3", "GOOD4", "GOOD5", "GOOD6"]
 
 
 def test_alpha_universe_rejects_high_risk_candidate_even_with_good_scores():

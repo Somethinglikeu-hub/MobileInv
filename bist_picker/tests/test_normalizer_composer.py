@@ -443,7 +443,6 @@ class TestCompose:
             "value_graham_dcf": 55.0,
             "growth": 80.0,
             "momentum": 45.0,
-            "insider": 60.0,
             "technical": 50.0,
             "piotroski": 65.0,
         }
@@ -494,7 +493,6 @@ class TestComposeAll:
             buffett_score=70.0,
             graham_score=55.0,
             momentum_score=60.0,
-            insider_score=45.0,
             technical_score=50.0,
             magic_formula_rank=65.0,
             lynch_peg_score=72.0,
@@ -516,12 +514,11 @@ class TestComposeAll:
         """compose_all() should set data_completeness on each row."""
         today = date(2026, 2, 1)
         cid = self._add_company(session, "BIMAS")
-        # Provide only 3 of 6 alpha factors (quality_buffett, momentum, insider).
+        # Provide only 2 of 6 alpha factors (quality_buffett, momentum).
         self._add_scoring_row(
             session, cid, today,
             buffett_score=60.0,
             momentum_score=55.0,
-            insider_score=40.0,
         )
         session.commit()
 
@@ -561,7 +558,6 @@ class TestComposeAll:
                 session, cid, today,
                 buffett_score=50.0,
                 momentum_score=50.0,
-                insider_score=50.0,
                 technical_score=50.0,
                 graham_score=50.0,
                 piotroski_fscore=5.0,

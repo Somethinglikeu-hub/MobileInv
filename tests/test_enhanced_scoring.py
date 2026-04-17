@@ -215,53 +215,48 @@ class TestEnhancedComposerWeightedAverage:
         from bist_picker.scoring.enhanced_composer import EnhancedComposer
 
         weights = {
-            "event_score": 0.35,
-            "insider_cluster": 0.30,
-            "macro_nowcast": 0.20,
-            "analyst_tone": 0.15,
+            "event_score": 0.50,
+            "macro_nowcast": 0.30,
+            "analyst_tone": 0.20,
         }
         scores = {
             "event_score": 80.0,
-            "insider_cluster": 60.0,
             "macro_nowcast": 70.0,
             "analyst_tone": 50.0,
         }
 
         result = EnhancedComposer._weighted_average(weights, scores)
         assert result is not None
-        # 80*0.35 + 60*0.30 + 70*0.20 + 50*0.15 = 28+18+14+7.5 = 67.5
-        assert abs(result - 67.5) < 0.1
+        # 80*0.50 + 70*0.30 + 50*0.20 = 40+21+10 = 71.0
+        assert abs(result - 71.0) < 0.1
 
     def test_missing_factor_redistributes(self):
         """Missing factor → weight redistributed to others."""
         from bist_picker.scoring.enhanced_composer import EnhancedComposer
 
         weights = {
-            "event_score": 0.35,
-            "insider_cluster": 0.30,
-            "macro_nowcast": 0.20,
-            "analyst_tone": 0.15,
+            "event_score": 0.50,
+            "macro_nowcast": 0.30,
+            "analyst_tone": 0.20,
         }
         scores = {
             "event_score": 80.0,
-            "insider_cluster": 60.0,
-            "macro_nowcast": None,  # Missing!
+            "macro_nowcast": 70.0,
             "analyst_tone": None,   # Missing!
         }
 
         result = EnhancedComposer._weighted_average(weights, scores)
         assert result is not None
-        # Only event (0.35) and insider (0.30) available
-        # Normalized: event=0.35/0.65=0.538, insider=0.30/0.65=0.462
-        expected = 80.0 * (0.35/0.65) + 60.0 * (0.30/0.65)
+        # Only event (0.50) and macro (0.30) available → normalize to 0.80
+        expected = 80.0 * (0.50/0.80) + 70.0 * (0.30/0.80)
         assert abs(result - expected) < 0.1
 
     def test_all_missing_returns_none(self):
         """All factors missing → returns None."""
         from bist_picker.scoring.enhanced_composer import EnhancedComposer
 
-        weights = {"event_score": 0.35, "insider_cluster": 0.30}
-        scores = {"event_score": None, "insider_cluster": None}
+        weights = {"event_score": 0.50, "macro_nowcast": 0.30}
+        scores = {"event_score": None, "macro_nowcast": None}
 
         result = EnhancedComposer._weighted_average(weights, scores)
         assert result is None
