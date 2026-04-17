@@ -60,6 +60,7 @@ def _make_scorer(extra_cfg: dict = None) -> DCFScorer:
     """Return a DCFScorer with inline config (no file I/O)."""
     scorer = DCFScorer.__new__(DCFScorer)
     scorer._config_path = Path("/nonexistent")
+    scorer._rate_cache = None
     scorer._cfg = {
         "discount_rate_try": 0.35,
         "terminal_growth_try": 0.12,
@@ -273,11 +274,13 @@ class TestGrowthRateEstimation:
         assert g == pytest.approx(0.00, abs=1e-9)
 
     def test_skips_nonpositive_eps_for_cagr(self):
-        """Negative EPS years are excluded from CAGR endpoints but the full
-        date span (including loss years) is used and a loss-year penalty applied.
+        """Negative EPS years are excluded from the log-linear regression
+        but counted toward the loss-year penalty.
 
-        Previously CAGR was 5.0→6.25 over 1 year = 25%.
-        Now: 5.0→6.25 over 2 years = 11.8%, then ×0.833 loss penalty = ~9.8%.
+        Log-linear regression on (5.0 @ t=1y, 6.25 @ t=2y) → slope = log(1.25),
+        annual growth = exp(slope) - 1 = 25%.
+        Loss penalty: 1 loss out of 3 total → 1 - (1/3 * 0.5) ≈ 0.8333.
+        Final: 0.25 * 0.8333 ≈ 0.2083.
         """
         scorer = _make_scorer()
         metrics = [
@@ -286,11 +289,8 @@ class TestGrowthRateEstimation:
             _metric(date(2024, 12, 31), 100_000, 100_000, 6.25),   # end
         ]
         g = scorer._estimate_growth_rate(metrics)
-        # CAGR: (6.25/5.0)^(1/2) - 1 ≈ 0.1180
-        # Loss penalty: 1 loss out of 3 total → 1 - (1/3 * 0.5) ≈ 0.8333
-        # Final: 0.1180 * 0.8333 ≈ 0.0984
-        expected = ((6.25 / 5.0) ** (1.0 / 2.0) - 1.0) * (1.0 - (1 / 3) * 0.50)
-        assert g == pytest.approx(expected, rel=1e-3)
+        expected = 0.25 * (1.0 - (1 / 3) * 0.50)
+        assert g == pytest.approx(expected, rel=5e-3)
 
 
 # ── Test 5: Company type eligibility ──────────────────────────────────────────

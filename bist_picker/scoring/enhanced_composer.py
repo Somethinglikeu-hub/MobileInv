@@ -29,7 +29,6 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 from bist_picker.scoring.factors.event_score import EventScorer
-from bist_picker.scoring.factors.insider import InsiderScorer
 from bist_picker.scoring.factors.macro_nowcast_score import MacroNowcastScorer
 
 logger = logging.getLogger("bist_picker.scoring.enhanced_composer")
@@ -52,10 +51,10 @@ def _load_weights(path: Path) -> dict:
 _DEFAULT_ENHANCED_WEIGHTS = {
     "classic_weight": 0.70,
     "enhanced_weight": 0.30,
-    "event_score": 0.35,
-    "insider_cluster": 0.30,
-    "macro_nowcast": 0.20,
-    "analyst_tone": 0.15,
+    # insider_cluster removed — no reliable data source for BIST.
+    "event_score": 0.50,
+    "macro_nowcast": 0.30,
+    "analyst_tone": 0.20,
 }
 
 
@@ -63,10 +62,14 @@ class EnhancedComposer:
     """Composes enhanced + classic blended scores.
 
     The enhanced composite score is:
-        enhanced_composite = w1*event + w2*insider_cluster + w3*macro + w4*analyst_tone
+        enhanced_composite = w1*event + w2*macro + w3*analyst_tone
 
     The final blended score is:
         blended = classic_weight * classic_composite + enhanced_weight * enhanced_composite
+
+    Note: the former ``insider_cluster`` signal has been dropped because the
+    BIST does not expose a reliable insider-transaction data source. Its
+    weight was redistributed across the remaining enhanced factors.
     """
 
     def __init__(self, weights_path: Optional[Path] = None) -> None:
@@ -79,7 +82,6 @@ class EnhancedComposer:
 
         # Initialize scorers
         self._event_scorer = EventScorer()
-        self._insider_scorer = InsiderScorer()
         self._macro_scorer = MacroNowcastScorer()
 
     def compose(
@@ -109,13 +111,6 @@ class EnhancedComposer:
         event_result = self._event_scorer.score(company_id, session, scoring_date)
         event_score = event_result["event_score"] if event_result else None
 
-        insider_result = self._insider_scorer.score_enhanced(company_id, session)
-        insider_cluster_score = None
-        if insider_result:
-            # Use insider_percentile as base, then boost with cluster multiplier
-            # insider_raw_enhanced already has cluster/drawdown multipliers applied
-            insider_cluster_score = insider_result.get("insider_percentile", 50.0)
-
         macro_result = self._macro_scorer.score_for_company(
             company_id, session, scoring_date,
         )
@@ -127,7 +122,6 @@ class EnhancedComposer:
         # 2. Calculate enhanced composite (0-100)
         enhanced_composite = self._weighted_average(weights, {
             "event_score": event_score,
-            "insider_cluster": insider_cluster_score,
             "macro_nowcast": macro_score,
             "analyst_tone": analyst_tone_score,
         })
@@ -167,7 +161,7 @@ class EnhancedComposer:
 
         return {
             "event_score": event_score,
-            "insider_cluster_score": insider_cluster_score,
+            "insider_cluster_score": None,  # signal dropped; column retained for schema compat
             "macro_nowcast_score": macro_score,
             "analyst_tone_score": analyst_tone_score,
             "enhanced_composite": round(enhanced_composite, 1) if enhanced_composite else None,
@@ -264,7 +258,7 @@ class EnhancedComposer:
         Factors with None scores have their weight proportionally
         redistributed among factors that have values.
         """
-        factor_keys = ["event_score", "insider_cluster", "macro_nowcast", "analyst_tone"]
+        factor_keys = ["event_score", "macro_nowcast", "analyst_tone"]
 
         available = {}
         for key in factor_keys:

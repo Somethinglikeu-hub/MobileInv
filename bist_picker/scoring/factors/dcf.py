@@ -1,18 +1,23 @@
 """DCF (Discounted Cash Flow) intrinsic value scorer for BIST Stock Picker.
 
-Projects owner earnings 10 years into the future, discounts them at the
-Turkey TRY discount rate (~35%), adds a Gordon Growth terminal value, and
-computes the margin of safety vs. the current market price.
+Projects owner earnings 10 years into the future, discounts them at a
+dynamic TRY cost-of-equity (policy rate + equity risk premium), adds a
+Gordon Growth terminal value, and computes the margin of safety vs. the
+current market price.
 
 Key design choices for Turkish equities:
-  - Discount rate: ~35% TRY (covers currency risk + country risk + real rate)
-  - Terminal growth: ~12% TRY (~3% real + ~9% long-run structural inflation)
+  - Discount rate: TCMB policy rate (from MacroRegime) + equity_risk_premium.
+    Falls back to static ``discount_rate_try`` when macro data is unavailable
+    or ``dynamic_discount_rate`` is disabled in config.
+  - Terminal growth: ``terminal_growth_try`` (config, ~long-run nominal TRY).
+    Re-checked against the dynamic rate so (r - g_terminal) stays positive.
   - Owner Earnings base: from AdjustedMetric (IAS 29-adjusted, D&A added back,
-    maintenance capex and WC change deducted)
-  - Per-share conversion: OE_per_share = OE x (eps_adjusted / adjusted_net_income)
-  - Growth rate: nominal CAGR of eps_adjusted over available history, capped at
-    max_growth_rate from config (default 30%)
-  - Returns None for negative/zero OE, banks, or holdings (separate models)
+    maintenance capex and WC change deducted).
+  - Per-share conversion: OE_per_share = OE x (eps_adjusted / adjusted_net_income).
+  - Growth rate: log-linear regression of positive eps_adjusted over time
+    (robust to single-year outliers), with a loss-year penalty, capped at
+    [min_growth_rate, max_growth_rate].
+  - Returns None for negative/zero OE, banks, or holdings (separate models).
 
 Output column: dcf_margin_of_safety_pct in ScoringResult
   Positive  -> stock is undervalued (MoS > 0)
@@ -31,7 +36,7 @@ import numpy as np
 import yaml
 from sqlalchemy.orm import Session
 
-from bist_picker.db.schema import AdjustedMetric, Company, DailyPrice
+from bist_picker.db.schema import AdjustedMetric, Company, DailyPrice, MacroRegime
 
 logger = logging.getLogger("bist_picker.scoring.factors.dcf")
 
@@ -62,6 +67,8 @@ class DCFScorer:
         self._config_path = config_path or _DEFAULT_CONFIG_PATH
         self._cfg: dict = {}
         self._load_config()
+        # Cache: (scoring_date, resolved_rate). Invalidated when scoring_date changes.
+        self._rate_cache: Optional[tuple[Optional[date], float, str]] = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -71,26 +78,7 @@ class DCFScorer:
         session: Session,
         scoring_date: Optional[date] = None,
     ) -> Optional[dict]:
-        """Run DCF valuation for a single company.
-
-        Args:
-            company_id: Database ID of the company.
-            session: Active SQLAlchemy session.
-            scoring_date: PiT date.
-
-        Returns:
-            Dict with DCF outputs, or None if the company is ineligible or
-            has insufficient data. Dict keys:
-
-              intrinsic_value_per_share  (float, TRY)
-              base_oe_per_share          (float, TRY) - most recent annual OE/share
-              growth_rate_used           (float) - fraction, e.g. 0.15 for 15%
-              years_projected            (int)
-              current_price              (float | None, TRY)
-              margin_of_safety_pct       (float | None) - positive = undervalued
-              dcf_combined               (float | None) - same as margin_of_safety_pct;
-                                           stored in ScoringResult.dcf_margin_of_safety_pct
-        """
+        """Run DCF valuation for a single company."""
         company = session.get(Company, company_id)
         if company is None:
             logger.warning("Company ID %d not found", company_id)
@@ -101,9 +89,6 @@ class DCFScorer:
             logger.debug("Skipping %s: company_type=%s (not applicable for DCF)", company.ticker, ctype)
             return None
 
-        # Load adjusted metrics ordered oldest -> newest.
-        # Filter out future periods with all-null data, and handle the fact
-        # that publication_date is always NULL (IsYatirim doesn't provide it).
         from datetime import date as _date, timedelta
         cutoff_date = scoring_date or _date.today()
         lagged_cutoff = cutoff_date - timedelta(days=76)
@@ -118,33 +103,28 @@ class DCFScorer:
             logger.debug("Skipping %s: no adjusted metrics", company.ticker)
             return None
 
-        # Compute per-share owner earnings for each year
         oe_per_share_series = self._compute_oe_per_share_series(metrics)
         if not oe_per_share_series:
             logger.debug("Skipping %s: cannot compute OE/share (missing data)", company.ticker)
             return None
 
-        # Need at least one positive OE year
         positive_oe = [v for v in oe_per_share_series if v > 0]
         if not positive_oe:
             logger.debug("Skipping %s: all owner earnings <= 0", company.ticker)
             return None
 
-        base_oe = positive_oe[-1]  # Most recent positive OE/share
+        base_oe = positive_oe[-1]
 
-        # Estimate nominal growth rate from historical eps_adjusted CAGR
         growth_rate = self._estimate_growth_rate(metrics)
 
-        # Project and discount owner earnings
-        intrinsic = self._compute_intrinsic_value(base_oe, growth_rate)
+        discount_rate, rate_source = self._resolve_discount_rate(session, scoring_date)
+
+        intrinsic = self._compute_intrinsic_value(base_oe, growth_rate, discount_rate)
         if intrinsic is None or intrinsic <= 0:
             return None
 
-        # Get current market price
         current_price = self._get_latest_price(company_id, session, scoring_date)
 
-        # Margin of safety (percentage), clamped to [-100, +200] to prevent
-        # extreme outliers from distorting composite scores.
         mos_pct: Optional[float] = None
         if current_price and current_price > 0:
             raw_mos = (intrinsic - current_price) / intrinsic * 100.0
@@ -154,26 +134,82 @@ class DCFScorer:
             "intrinsic_value_per_share": round(intrinsic, 2),
             "base_oe_per_share": round(base_oe, 4),
             "growth_rate_used": round(growth_rate, 4),
+            "discount_rate_used": round(discount_rate, 4),
+            "discount_rate_source": rate_source,
             "years_projected": self._cfg.get("projection_years", 10),
             "current_price": current_price,
             "margin_of_safety_pct": mos_pct,
-            "dcf_combined": mos_pct,  # stored in ScoringResult.dcf_margin_of_safety_pct
+            "dcf_combined": mos_pct,
         }
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
+    def _resolve_discount_rate(
+        self,
+        session: Session,
+        scoring_date: Optional[date] = None,
+    ) -> tuple[float, str]:
+        """Return (discount_rate, source) for the current scoring run.
+
+        When ``dcf.dynamic_discount_rate`` is truthy, reads the most recent
+        MacroRegime.policy_rate_pct on or before ``scoring_date`` and adds
+        ``dcf.equity_risk_premium_try``. Falls back to the static
+        ``dcf.discount_rate_try`` when macro data is missing or dynamic mode
+        is disabled.
+
+        The spread (r - terminal_growth_try) is validated: if dynamic r would
+        fall at or below terminal growth, falls back to static.
+
+        Result is cached per scoring_date within a single scorer instance.
+        """
+        if self._rate_cache is not None and self._rate_cache[0] == scoring_date:
+            return self._rate_cache[1], self._rate_cache[2]
+
+        static_r = float(self._cfg.get("discount_rate_try", 0.35))
+        g_terminal = float(self._cfg.get("terminal_growth_try", 0.12))
+        dynamic_enabled = bool(self._cfg.get("dynamic_discount_rate", True))
+        erp = float(self._cfg.get("equity_risk_premium_try", 0.06))
+        min_spread = float(self._cfg.get("min_rate_terminal_spread", 0.05))
+
+        if not dynamic_enabled:
+            self._rate_cache = (scoring_date, static_r, "static_config")
+            return static_r, "static_config"
+
+        query = session.query(MacroRegime).filter(
+            MacroRegime.policy_rate_pct.isnot(None),
+        )
+        if scoring_date is not None:
+            query = query.filter(MacroRegime.date <= scoring_date)
+        latest = query.order_by(MacroRegime.date.desc()).first()
+
+        if latest is None or latest.policy_rate_pct is None:
+            logger.info("No MacroRegime policy rate found; using static %.2f%%", static_r * 100)
+            self._rate_cache = (scoring_date, static_r, "static_fallback_no_macro")
+            return static_r, "static_fallback_no_macro"
+
+        policy = float(latest.policy_rate_pct)
+        # policy_rate stored as fraction (e.g., 0.425 = 42.5%)
+        dyn_r = policy + erp
+
+        if dyn_r - g_terminal < min_spread:
+            logger.warning(
+                "Dynamic rate %.2f%% (policy %.2f%% + ERP %.2f%%) too close to "
+                "terminal growth %.2f%%; using static %.2f%%",
+                dyn_r * 100, policy * 100, erp * 100, g_terminal * 100, static_r * 100,
+            )
+            self._rate_cache = (scoring_date, static_r, "static_fallback_thin_spread")
+            return static_r, "static_fallback_thin_spread"
+
+        logger.info(
+            "DCF discount rate: %.2f%% (policy %.2f%% + ERP %.2f%%, as of %s)",
+            dyn_r * 100, policy * 100, erp * 100, latest.date,
+        )
+        self._rate_cache = (scoring_date, dyn_r, "dynamic_policy_plus_erp")
+        return dyn_r, "dynamic_policy_plus_erp"
+
     def _compute_oe_per_share_series(
         self, metrics: list[AdjustedMetric]
     ) -> list[float]:
-        """Return per-share owner earnings for each year with sufficient data.
-
-        Per-share OE = owner_earnings * (eps_adjusted / adjusted_net_income).
-        This is dimensionally consistent because all three values come from
-        the same unit base (the financial statements) and the ratio is
-        unitless, leaving the result in TRY/share.
-
-        Years where adjusted_net_income <= 0 or eps_adjusted is None are skipped.
-        """
         series = []
         for m in metrics:
             oe = m.owner_earnings
@@ -183,7 +219,6 @@ class DCFScorer:
             if oe is None or ani is None or eps is None:
                 continue
             if ani <= 0:
-                # Cannot derive shares from negative net income
                 continue
 
             oe_per_share = oe * (eps / ani)
@@ -192,84 +227,81 @@ class DCFScorer:
         return series
 
     def _estimate_growth_rate(self, metrics: list[AdjustedMetric]) -> float:
-        """Estimate nominal growth rate from historical eps_adjusted CAGR.
+        """Estimate nominal growth rate from eps_adjusted history.
 
-        Uses positive-EPS endpoints for the CAGR ratio, but counts the FULL
-        calendar span including loss years. Additionally applies a loss-year
-        penalty: growth is reduced by (loss_years / total_years) * 50%.
+        Uses log-linear regression on positive EPS observations vs. time-in-years:
+            log(eps_t) = a + b * t   ->   annual growth = exp(b) - 1
 
-        The result is capped at [min_growth_rate, max_growth_rate] from config.
+        This is robust to single-year outliers in a way that endpoint-CAGR is
+        not: a freak first or last year cannot dominate the estimate.
+
+        Additionally applies a loss-year penalty based on the share of
+        observations with eps <= 0: penalty = 1 - (loss_years / total) * 0.50.
+
+        The result is clamped to [min_growth_rate, max_growth_rate] from config.
         """
         min_g = self._cfg.get("min_growth_rate", 0.05)
         max_g = self._cfg.get("max_growth_rate", 0.35)
         default_g = self._cfg.get("conservative_growth_rate", 0.10)
 
-        # ALL EPS observations (including negative) for full date span
         all_eps = [
             (m.eps_adjusted, m.period_end)
             for m in metrics
             if m.eps_adjusted is not None
         ]
+        positive = [(eps, dt) for eps, dt in all_eps if eps > 0]
 
-        # Positive EPS only — used for CAGR endpoints
-        eps_pairs = [(eps, dt) for eps, dt in all_eps if eps > 0]
-
-        if len(eps_pairs) < 2:
-            logger.debug("Insufficient EPS history; using conservative growth %.0f%%", default_g * 100)
+        if len(positive) < 2:
+            logger.debug("Insufficient positive EPS history; using conservative %.0f%%", default_g * 100)
             return max(min_g, min(max_g, default_g))
 
-        first_eps, _ = eps_pairs[0]
-        last_eps, _ = eps_pairs[-1]
+        base_date = all_eps[0][1]
+        t_years = np.array([(dt - base_date).days / 365.25 for _, dt in positive], dtype=float)
+        log_eps = np.array([np.log(eps) for eps, _ in positive], dtype=float)
 
-        # Use FULL date span (including loss years) for the CAGR denominator
-        n_years = (all_eps[-1][1] - all_eps[0][1]).days / 365.25
-        if n_years < 0.5:
+        if t_years[-1] - t_years[0] < 0.5:
             return max(min_g, min(max_g, default_g))
 
         try:
-            cagr = (last_eps / first_eps) ** (1.0 / n_years) - 1.0
-        except (ZeroDivisionError, ValueError):
+            slope, _intercept = np.polyfit(t_years, log_eps, 1)
+        except (np.linalg.LinAlgError, ValueError):
             return max(min_g, min(max_g, default_g))
 
-        if not np.isfinite(cagr):
+        if not np.isfinite(slope):
             return max(min_g, min(max_g, default_g))
 
-        # Loss-year penalty: reduce growth when many years had negative EPS.
-        # E.g., 2 loss years out of 5 total → penalty = 1 - (0.4 * 0.5) = 0.80
+        # Continuous-compounding slope -> annual growth rate
+        annual_growth = float(np.exp(slope) - 1.0)
+
         loss_years = sum(1 for eps, _ in all_eps if eps <= 0)
         loss_penalty = 1.0 - (loss_years / len(all_eps)) * 0.50
-        cagr = cagr * loss_penalty
+        annual_growth *= loss_penalty
 
-        capped = max(min_g, min(max_g, cagr))
+        capped = max(min_g, min(max_g, annual_growth))
         logger.debug(
-            "EPS CAGR over %.1f years (incl. %d loss years): %.1f%% -> capped to %.1f%%",
-            n_years, loss_years, cagr * 100, capped * 100,
+            "EPS log-linear growth over %.1f years (incl. %d loss years): "
+            "%.1f%% -> capped to %.1f%%",
+            t_years[-1] - t_years[0], loss_years, annual_growth * 100, capped * 100,
         )
         return capped
 
     def _compute_intrinsic_value(
-        self, base_oe_per_share: float, growth_rate: float
+        self,
+        base_oe_per_share: float,
+        growth_rate: float,
+        discount_rate: Optional[float] = None,
     ) -> Optional[float]:
-        """Compute intrinsic value per share via 10-year DCF + terminal value.
+        """Compute intrinsic value per share via N-year DCF + Gordon terminal value.
 
-        Formula:
-          PV = sum(OE_t / (1+r)^t,  t=1..N)
-          TV = OE_N * (1+g_terminal) / (r - g_terminal)
-          PV_TV = TV / (1+r)^N
-          intrinsic = PV + PV_TV
-
-        where:
-          r   = discount_rate_try  (config)
-          g   = growth_rate        (estimated from history)
-          g_t = terminal_growth_try (config)
-          N   = projection_years   (config, default 10)
-
-        Returns None if the spread (r - g_terminal) would be zero or negative,
-        which would cause a division by zero in the terminal value formula.
+        If ``discount_rate`` is None, falls back to the static ``discount_rate_try``
+        from config. Callers that want the dynamic rate should resolve it first
+        via ``_resolve_discount_rate`` and pass the result explicitly.
         """
-        r = self._cfg.get("discount_rate_try", 0.35)
         g_terminal = self._cfg.get("terminal_growth_try", 0.12)
         n = self._cfg.get("projection_years", 10)
+        r = discount_rate if discount_rate is not None else float(
+            self._cfg.get("discount_rate_try", 0.35)
+        )
 
         spread = r - g_terminal
         if spread <= 0:
@@ -279,15 +311,12 @@ class DCFScorer:
             )
             return None
 
-        # Project owner earnings: OE_t = base * (1+g)^t
         pv_sum = 0.0
         oe_t = base_oe_per_share
         for t in range(1, n + 1):
             oe_t = oe_t * (1.0 + growth_rate)
             pv_sum += oe_t / ((1.0 + r) ** t)
 
-        # Terminal value at end of projection period (OE after year N)
-        # oe_t here is OE at year N
         tv = oe_t * (1.0 + g_terminal) / spread
         pv_tv = tv / ((1.0 + r) ** n)
 
@@ -307,7 +336,7 @@ class DCFScorer:
 
         if scoring_date:
             query = query.filter(DailyPrice.date <= scoring_date)
-            
+
         row = query.order_by(DailyPrice.date.desc()).first()
         if row:
             return row.adjusted_close

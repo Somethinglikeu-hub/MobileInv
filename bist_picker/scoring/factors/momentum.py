@@ -132,11 +132,11 @@ class MomentumScorer:
         session: Session,
         scoring_date: Optional[date] = None,
     ) -> dict[int, dict]:
-        """Score all active companies and normalize to percentile ranks.
+        """Score all active companies.
 
-        Returns:
-            Dict mapping company_id to score dict with percentile-normalized
-            momentum_combined (0-100).
+        Returns raw momentum_combined per company; universe-wide percentile
+        normalization is applied downstream by ScoreComposer, so this method
+        intentionally does not compute its own percentile ranks.
         """
         companies = (
             session.query(Company.id)
@@ -149,20 +149,6 @@ class MomentumScorer:
             result = self.score(cid, session, scoring_date)
             if result is not None:
                 raw_scores[cid] = result
-
-        if not raw_scores:
-            return {}
-
-        # Percentile normalize the combined momentum
-        combined_values = sorted(
-            raw_scores.keys(),
-            key=lambda cid: raw_scores[cid]["momentum_combined"] or -999,
-        )
-
-        n = len(combined_values)
-        for i, cid in enumerate(combined_values):
-            percentile = (i / (n - 1) * 100.0) if n > 1 else 50.0
-            raw_scores[cid]["momentum_percentile"] = percentile
 
         return raw_scores
 
