@@ -24,6 +24,17 @@ _SETTINGS_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.y
 _engine: Engine | None = None
 _SessionFactory: sessionmaker | None = None
 
+# Idempotent column-add migrations for existing SQLite databases.
+# `Base.metadata.create_all` only creates missing tables; it does not alter
+# existing ones. Each entry here is applied only if the column is absent.
+# Key format: (table, column) -> ALTER TABLE DDL.
+_RUNTIME_SQLITE_COLUMN_ADDS: dict[tuple[str, str], str] = {
+    ("macro_regime", "inflation_expectation_24m_pct"): (
+        "ALTER TABLE macro_regime "
+        "ADD COLUMN inflation_expectation_24m_pct REAL"
+    ),
+}
+
 _RUNTIME_SQLITE_INDEXES: dict[str, str] = {
     "idx_scoring_results_scoring_date": (
         "CREATE INDEX IF NOT EXISTS idx_scoring_results_scoring_date "
@@ -132,6 +143,16 @@ def ensure_runtime_db_ready(engine: Engine | None = None) -> Engine:
         return engine
 
     with engine.begin() as connection:
+        # Apply idempotent column-add migrations first so subsequent index
+        # creation can reference the new columns if needed.
+        for (table, column), ddl in _RUNTIME_SQLITE_COLUMN_ADDS.items():
+            existing = connection.exec_driver_sql(
+                f"PRAGMA table_info({table})"
+            ).fetchall()
+            existing_cols = {row[1] for row in existing}
+            if column not in existing_cols:
+                connection.exec_driver_sql(ddl)
+
         for ddl in _RUNTIME_SQLITE_INDEXES.values():
             connection.exec_driver_sql(ddl)
 

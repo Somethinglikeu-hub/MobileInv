@@ -268,6 +268,9 @@ class MacroRegime(Base):
     cpi_yoy_pct: Optional[float] = Column(Float)
     usdtry_rate: Optional[float] = Column(Float)
     turkey_cds_5y: Optional[float] = Column(Float)
+    # Market Participants Survey (TCMB) 24-month-ahead CPI expectation, decimal
+    # (e.g., 0.18 = 18%). Feeds DCF terminal growth: g_terminal = expected + real.
+    inflation_expectation_24m_pct: Optional[float] = Column(Float)
     regime: Optional[str] = Column(String(20))  # RISK_ON / RISK_OFF / TRANSITION
     weight_adjustments_json: Optional[str] = Column(Text)
     created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)

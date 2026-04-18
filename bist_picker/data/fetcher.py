@@ -538,6 +538,10 @@ class DataFetcher:
         inflation = self._tcmb.get_inflation_rate(months_back=12)
         stats["inflation_rate"] = inflation
 
+        # 24-month-ahead CPI expectation (feeds DCF terminal growth)
+        inflation_exp_24m = self._tcmb.fetch_inflation_expectations_24m()
+        stats["inflation_expectation_24m"] = inflation_exp_24m
+
         # Store in macro_regime table
         if not fx.empty:
             for _, row in fx.iterrows():
@@ -564,8 +568,8 @@ class DataFetcher:
 
             self._session.flush()
 
-        # Update latest macro_regime with CPI and policy rate
-        if policy_rate is not None or inflation is not None:
+        # Update latest macro_regime with CPI, policy rate, and 24m inflation expectation
+        if policy_rate is not None or inflation is not None or inflation_exp_24m is not None:
             today = date.today()
             existing = (
                 self._session.query(MacroRegime)
@@ -577,21 +581,26 @@ class DataFetcher:
                     existing.policy_rate_pct = policy_rate
                 if inflation is not None:
                     existing.cpi_yoy_pct = inflation
+                if inflation_exp_24m is not None:
+                    existing.inflation_expectation_24m_pct = inflation_exp_24m
             else:
                 regime = MacroRegime(
                     date=today,
                     policy_rate_pct=policy_rate,
                     cpi_yoy_pct=inflation,
+                    inflation_expectation_24m_pct=inflation_exp_24m,
                 )
                 self._session.add(regime)
             self._session.flush()
 
         policy_str = f"{policy_rate:.1%}" if policy_rate else "N/A"
         inflation_str = f"{inflation:.1%}" if inflation else "N/A"
+        exp24_str = f"{inflation_exp_24m:.1%}" if inflation_exp_24m else "N/A"
         self._console.print(
             f"  Macro: {stats['cpi_points']} CPI points, "
             f"{stats['fx_points']} FX points (source: {fx_source}), "
-            f"policy rate={policy_str}, inflation={inflation_str}"
+            f"policy rate={policy_str}, inflation={inflation_str}, "
+            f"24m CPI exp={exp24_str}"
         )
         return stats
 

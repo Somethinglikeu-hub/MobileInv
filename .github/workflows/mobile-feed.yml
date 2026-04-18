@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write  # needed to open/close the macro-staleness reminder issue
 
 jobs:
   publish-mobile-feed:
@@ -119,6 +120,88 @@ jobs:
             git commit -m "Update mobile pipeline state"
             git push origin "${STATE_BRANCH}"
           fi
+
+      - name: Check macro config staleness
+        id: macro_check
+        continue-on-error: true
+        run: |
+          set +e
+          python -m bist_picker.macro_check --json > macro_check.json
+          status=$?
+          echo "is_stale=$([ $status -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          cat macro_check.json
+          exit 0
+
+      - name: Open or update stale-macro issue
+        if: steps.macro_check.outputs.is_stale == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('macro_check.json', 'utf8'));
+            const title = '[macro] Update required — Damodaran ERP refresh';
+            const lines = [
+              'The pipeline detected stale manual-review macro values.',
+              '',
+              `**Checked at:** ${report.checked_at}`,
+              '',
+              '### Stale fields',
+              '',
+            ];
+            for (const f of report.stale_fields) {
+              lines.push(`- \`${f.field}\` — last updated **${f.last_updated}** (${f.age_days}d ago, threshold ${f.stale_after_days}d)`);
+              lines.push(`  - Current value: \`${f.current_value}\``);
+              if (f.source_url) lines.push(`  - Source: ${f.source_url}`);
+              lines.push('');
+              lines.push('  **How to update:**');
+              for (const step of f.update_instructions.split('\n')) {
+                lines.push(`  ${step}`);
+              }
+              lines.push('');
+            }
+            lines.push('_This issue is opened automatically by the Publish Mobile Feed workflow and will close on the next successful run once values are fresh._');
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'macro-stale',
+              per_page: 50,
+            });
+            const match = existing.data.find(i => i.title === title);
+            if (match) {
+              await github.rest.issues.update({
+                owner, repo, issue_number: match.number, body,
+              });
+              core.info(`Updated existing issue #${match.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo, title, body, labels: ['macro-stale'],
+              });
+              core.info(`Opened issue #${created.data.number}`);
+            }
+
+      - name: Close stale-macro issue when fresh
+        if: steps.macro_check.outputs.is_stale == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '[macro] Update required — Damodaran ERP refresh';
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'macro-stale',
+              per_page: 50,
+            });
+            for (const issue of existing.data) {
+              if (issue.title !== title) continue;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: 'Closing automatically: macro config refreshed and no longer stale.',
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number, state: 'closed',
+              });
+              core.info(`Closed issue #${issue.number}`);
+            }
 
       - name: Publish manifest and snapshot to public feed repo
         run: |
