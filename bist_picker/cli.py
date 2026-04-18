@@ -1,15 +1,15 @@
 """CLI entry point for BIST Stock Picker.
 
 Uses Click to provide commands for the full analysis pipeline:
-  menu    -> Interactive terminal menu (setup + run + daily ops)
-  fetch   -> Stage 1: download price and financial data
-  clean   -> Stage 2: inflation-adjust, compute metrics, classify companies
-  score   -> Stage 3: calculate and normalize all factor scores
-  pick    -> Stage 4: select portfolio stocks
-  report  -> Stage 5: display portfolio tables
-  run     -> All stages sequentially
-  status  -> Current portfolio holdings with P&L
-  inspect -> Deep dive on a single ticker
+  menu        -> Interactive terminal menu (setup + run + daily ops)
+  fetch       -> Stage 1: download price and financial data
+  clean       -> Stage 2: inflation-adjust, compute metrics, classify companies
+  score       -> Stage 3: calculate and normalize all factor scores
+  pick        -> Stage 4: select portfolio stocks
+  report      -> Stage 5: display portfolio tables
+  run         -> All stages sequentially
+  status      -> Current portfolio holdings with P&L
+  inspect     -> Deep dive on a single ticker
   check-exits -> Mid-month exit check (stop-loss / target / thesis)
 
 Global flags:
@@ -462,8 +462,6 @@ def pick(ctx: click.Context) -> None:
 @cli.command()
 @click.option(
     "--portfolio",
-    # NOTE: "beta" and "delta" choices commented out — only ALPHA portfolio is active.
-    # To re-enable, restore the full list: ["alpha", "beta", "delta", "all"]
     type=click.Choice(["alpha", "all"], case_sensitive=False),
     default="all",
     help="Which portfolio to display.",
@@ -474,13 +472,8 @@ def pick(ctx: click.Context) -> None:
     default="terminal",
     help="Output format: terminal table or Excel file.",
 )
-@click.option(
-    "--llm/--no-llm",
-    default=False,
-    help="Generate AI-powered analysis reports for selected stocks.",
-)
 @click.pass_context
-def report(ctx: click.Context, portfolio: str, format: str, llm: bool) -> None:
+def report(ctx: click.Context, portfolio: str, format: str) -> None:
     """Stage 5: Display portfolio tables or generate Excel report."""
     from bist_picker.db.connection import session_scope
     from bist_picker.db.schema import Company, PortfolioSelection
@@ -515,9 +508,7 @@ def report(ctx: click.Context, portfolio: str, format: str, llm: bool) -> None:
         perf_table.add_column("Avg Return", justify="right")
         perf_table.add_column("Win Rate", justify="right")
         
-        # NOTE: BETA and DELTA commented out — only ALPHA portfolio performance shown.
-        # To re-enable, restore the full list: ["ALPHA", "BETA", "DELTA"]
-        for p in ["ALPHA"]:  # "BETA", "DELTA"]:
+        for p in ["ALPHA"]:
             stats = tracker.calculate_portfolio_performance(p)
             avg = stats.get("total_return_avg", 0.0)
             win = stats.get("win_rate", 0.0)
@@ -529,10 +520,8 @@ def report(ctx: click.Context, portfolio: str, format: str, llm: bool) -> None:
 
         output = TerminalOutput(console=console)
         target_count = get_selection_target_count()
-        # NOTE: BETA and DELTA commented out — only ALPHA portfolio is shown.
-        # To re-enable, restore the full list: ["alpha", "beta", "delta"]
         portfolios_to_show = (
-            ["alpha"]  # ["alpha", "beta", "delta"]
+            ["alpha"]
             if portfolio.lower() == "all"
             else [portfolio.lower()]
         )
@@ -579,44 +568,19 @@ def report(ctx: click.Context, portfolio: str, format: str, llm: bool) -> None:
 
             output.show_portfolio(pname, picks, session)
 
-        # LLM-powered AI analysis reports
-        if llm:
-            from bist_picker.output.llm_report import LLMReportGenerator
-
-            console.print()
-            console.print("[bold magenta]Generating AI analysis reports...[/bold magenta]")
-            console.print()
-
-            try:
-                report_gen = LLMReportGenerator(console=console)
-                for pname in portfolios_to_show:
-                    reports = report_gen.generate_portfolio_reports(
-                        pname.upper(), session
-                    )
-                    report_gen.display_reports(reports)
-            except ValueError as e:
-                console.print(f"[red]LLM not available: {e}[/red]")
-            except Exception as e:
-                console.print(f"[red]LLM report generation failed: {e}[/red]")
-
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
 @cli.command()
 @click.option("--ticker", multiple=True, help="Limit pipeline to specific ticker(s).")
-@click.option("--enhanced/--no-enhanced", default=False, help="Include enhanced (LLM) pipeline.")
 @click.option("--use-regime", is_flag=True, help="Use dynamic regime-switching weights.")
 @click.pass_context
-def run(ctx: click.Context, ticker: tuple, enhanced: bool, use_regime: bool) -> None:
+def run(ctx: click.Context, ticker: tuple, use_regime: bool) -> None:
     """Run all pipeline stages sequentially: fetch, clean, score, pick, report."""
     console.print("[bold blue]Running full pipeline...[/bold blue]")
     ctx.invoke(fetch, ticker=ticker, prices_only=False, limit=0)
     ctx.invoke(clean)
     ctx.invoke(score, use_regime=use_regime)
-    if enhanced:
-        console.print("[bold magenta]Running enhanced pipeline...[/bold magenta]")
-        ctx.invoke(fetch_enhanced)
-        ctx.invoke(enhance, portfolio="alpha")
     ctx.invoke(pick)
     ctx.invoke(report, portfolio="all")
     console.print("[bold green]Pipeline complete.[/bold green]")
@@ -718,7 +682,7 @@ def check_exits(ctx: click.Context) -> None:
 @cli.command(name="push-sheets")
 @click.option(
     "--portfolio",
-    type=click.Choice(["alpha", "beta", "delta", "all"], case_sensitive=False),
+    type=click.Choice(["alpha", "all"], case_sensitive=False),
     default="all",
     help="Which portfolio to push.",
 )
@@ -748,7 +712,7 @@ def push_sheets(ctx: click.Context, portfolio: str, sheet_name: str) -> None:
     
     with session_scope(engine) as session:
         portfolios_to_push = (
-            ["alpha", "beta", "delta"]
+            ["alpha"]
             if portfolio.lower() == "all"
             else [portfolio.lower()]
         )
@@ -798,178 +762,6 @@ def push_sheets(ctx: click.Context, portfolio: str, sheet_name: str) -> None:
                 console.print(f"[green]Successfully pushed {pname.upper()}.[/green]")
             else:
                 console.print(f"[red]Failed to push {pname.upper()}.[/red]")
-
-
-# ── fetch-enhanced ────────────────────────────────────────────────────────────
-
-@cli.command(name="fetch-enhanced")
-@click.pass_context
-def fetch_enhanced(ctx: click.Context) -> None:
-    """Fetch enhanced data: EVDS nowcast + LLM KAP event analysis."""
-    from bist_picker.db.connection import session_scope
-    from bist_picker.db.schema import KapEvent, MacroNowcast
-
-    dry_run: bool = ctx.obj.get("dry_run", False)
-    engine = _get_engine_and_tables()
-
-    with session_scope(engine) as session:
-        console.print("[bold blue]Fetching enhanced data sources...[/bold blue]")
-
-        # 1. EVDS Nowcast data
-        try:
-            from bist_picker.data.sources.evds_nowcast import EVDSNowcastClient
-            console.print("[dim]  Fetching BONC + credit card data from EVDS...[/dim]")
-            evds = EVDSNowcastClient()
-            nowcast_data = evds.fetch_all_nowcast_data()
-
-            bonc_df = nowcast_data.get("bonc")
-            cc_df = nowcast_data.get("credit_card")
-
-            if bonc_df is not None and not bonc_df.empty:
-                latest = bonc_df.iloc[-1]
-                regime = evds.interpret_bonc_for_regime(latest.to_dict())
-                console.print(
-                    f"  BONC: {latest.get('bonc_index', 'N/A'):.1f} "
-                    f"(trend={latest.get('bonc_trend', 'N/A')}, regime={regime})"
-                )
-
-                if not dry_run:
-                    # Store latest nowcast row
-                    from datetime import date as _date
-                    for _, row in bonc_df.iterrows():
-                        existing = (
-                            session.query(MacroNowcast)
-                            .filter(MacroNowcast.date == row["date"])
-                            .first()
-                        )
-                        if existing:
-                            existing.bonc_index = row.get("bonc_index")
-                            existing.bonc_change_mom = row.get("bonc_change_mom")
-                            existing.bonc_trend = row.get("bonc_trend")
-                        else:
-                            session.add(MacroNowcast(
-                                date=row["date"],
-                                bonc_index=row.get("bonc_index"),
-                                bonc_change_mom=row.get("bonc_change_mom"),
-                                bonc_trend=row.get("bonc_trend"),
-                            ))
-                    session.commit()
-                    console.print(f"[green]  Stored {len(bonc_df)} BONC observations.[/green]")
-            else:
-                console.print("[yellow]  No BONC data returned.[/yellow]")
-
-        except Exception as e:
-            console.print(f"[yellow]  EVDS fetch skipped: {e}[/yellow]")
-
-        # 2. LLM KAP event analysis (if available)
-        try:
-            from bist_picker.data.sources.llm_analyzer import LLMAnalyzer
-            console.print("[dim]  Initializing LLM analyzer...[/dim]")
-            analyzer = LLMAnalyzer()
-            stats = analyzer.get_usage_stats()
-            console.print(
-                f"  LLM ready: model={stats['model']}, "
-                f"remaining={stats['requests_remaining']} requests"
-            )
-        except Exception as e:
-            console.print(f"[yellow]  LLM initialization skipped: {e}[/yellow]")
-
-    console.print("[green]Enhanced data fetch complete.[/green]")
-
-
-# ── enhance ───────────────────────────────────────────────────────────────────
-
-@cli.command()
-@click.option(
-    "--portfolio",
-    type=click.Choice(["alpha", "beta", "delta"], case_sensitive=False),
-    default="alpha",
-    help="Which portfolio weights to use for blending.",
-)
-@click.pass_context
-def enhance(ctx: click.Context, portfolio: str) -> None:
-    """Run enhanced scoring pipeline and blend with classic scores."""
-    from bist_picker.db.connection import session_scope
-    from bist_picker.scoring.enhanced_composer import EnhancedComposer
-
-    dry_run: bool = ctx.obj.get("dry_run", False)
-    engine = _get_engine_and_tables()
-
-    with session_scope(engine) as session:
-        console.print(
-            f"[bold blue]Running enhanced scoring ({portfolio.upper()})...[/bold blue]"
-        )
-
-        composer = EnhancedComposer()
-        scoring_date = date.today()
-
-        if dry_run:
-            console.print("[yellow]--dry-run: computing but not persisting.[/yellow]")
-            # Still compute but don't commit
-            from bist_picker.db.schema import Company
-            company_ids = [
-                cid for (cid,) in
-                session.query(Company.id)
-                .filter(Company.is_active.is_(True))
-                .all()
-            ]
-            scored = 0
-            for cid in company_ids:
-                result = composer.compose(cid, session, portfolio, scoring_date)
-                if result and result.get("blended"):
-                    scored += 1
-            console.print(f"  Would score {scored} companies (dry-run).")
-        else:
-            results = composer.compose_all(session, scoring_date, portfolio)
-            scored = sum(1 for r in results.values() if r.get("blended"))
-            console.print(
-                f"[green]Enhanced scoring complete: {scored}/{len(results)} "
-                f"companies scored.[/green]"
-            )
-
-
-# ── optimize-weights ──────────────────────────────────────────────────────────
-
-@cli.command(name="optimize-weights")
-@click.option(
-    "--portfolio",
-    type=click.Choice(["alpha", "beta", "delta"], case_sensitive=False),
-    default="alpha",
-    help="Which portfolio weights to optimize.",
-)
-@click.option("--trials", default=100, help="Number of Optuna trials.")
-@click.option("--apply/--no-apply", default=False, help="Apply best weights to config.")
-@click.pass_context
-def optimize_weights(ctx: click.Context, portfolio: str, trials: int, apply: bool) -> None:
-    """Optimize enhanced scoring weights using Optuna (Lite RL)."""
-    from bist_picker.scoring.optimizer import WeightOptimizer
-
-    console.print(
-        f"[bold blue]Optimizing enhanced weights ({portfolio.upper()}, "
-        f"{trials} trials)...[/bold blue]"
-    )
-
-    optimizer = WeightOptimizer(portfolio=portfolio)
-
-    # Show current weights
-    current = optimizer.get_current_weights(portfolio)
-    if current:
-        console.print("[dim]Current weights:[/dim]")
-        for k, v in current.items():
-            console.print(f"  {k}: {v}")
-
-    result = optimizer.optimize(n_trials=trials)
-
-    console.print(f"\n[green]Best trial #{result['best_trial_number']} "
-                  f"(score={result['best_value']:.4f}):[/green]")
-    for k, v in result["weights"].items():
-        console.print(f"  {k}: {v}")
-
-    if apply:
-        path = optimizer.apply_weights(result, portfolio)
-        console.print(f"[green]Weights written to {path}[/green]")
-    else:
-        console.print("[dim]Use --apply to write these weights to config.[/dim]")
 
 
 @cli.command(name="export-mobile-snapshot")
@@ -1046,7 +838,7 @@ def _prompt_portfolio(default: str = "all") -> str:
     """Prompt for portfolio selection."""
     return click.prompt(
         "Portfolio",
-        type=click.Choice(["alpha", "beta", "delta", "all"], case_sensitive=False),
+        type=click.Choice(["alpha", "all"], case_sensitive=False),
         default=default,
         show_default=True,
     ).lower()
@@ -1093,10 +885,10 @@ def _ensure_tcmb_api_key() -> None:
 
 
 def _run_full_pipeline_for_tickers(
-    ctx: click.Context, tickers: tuple[str, ...], enhanced: bool = False,
+    ctx: click.Context, tickers: tuple[str, ...],
 ) -> None:
     """Run full pipeline with optional ticker filter."""
-    ctx.invoke(run, ticker=tickers, enhanced=enhanced)
+    ctx.invoke(run, ticker=tickers)
 
 
 def _stage_menu(ctx: click.Context) -> None:
@@ -1111,14 +903,11 @@ def _stage_menu(ctx: click.Context) -> None:
         console.print("  6) Report (terminal)")
         console.print("  7) Report (excel)")
         console.print("  8) Historical Backfill (5yr quarterly financials)")
-        console.print("  [bold magenta]9) Fetch Enhanced (EVDS + LLM)[/bold magenta]")
-        console.print("  [bold magenta]10) Enhance (run enhanced scoring)[/bold magenta]")
-        console.print("  [bold magenta]11) Optimize Weights (Optuna)[/bold magenta]")
         console.print("  0) Back")
 
         choice = click.prompt(
             "Select option",
-            type=click.Choice(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "0"]),
+            type=click.Choice(["1", "2", "3", "4", "5", "6", "7", "8", "0"]),
         )
 
         if choice == "0":
@@ -1146,22 +935,12 @@ def _stage_menu(ctx: click.Context) -> None:
             ctx.invoke(report, portfolio=portfolio, format="excel")
         elif choice == "8":
             console.print(
-                "\n[bold magenta]This fetches 5 years of quarterly financial data "
-                "from IsYatirim.[/bold magenta]"
+                "\n[bold]This fetches 5 years of quarterly financial data "
+                "from IsYatirim.[/bold]"
             )
             console.print("[dim]This is a one-time operation — historical data doesn't change.[/dim]")
             if click.confirm("Proceed with historical backfill?", default=True):
                 ctx.invoke(fetch, ticker=(), prices_only=False, limit=0, history=True)
-        elif choice == "9":
-            ctx.invoke(fetch_enhanced)
-        elif choice == "10":
-            portfolio = _prompt_portfolio(default="alpha")
-            ctx.invoke(enhance, portfolio=portfolio)
-        elif choice == "11":
-            portfolio = _prompt_portfolio(default="alpha")
-            trials = click.prompt("Number of trials", type=int, default=100)
-            do_apply = click.confirm("Apply best weights to config?", default=False)
-            ctx.invoke(optimize_weights, portfolio=portfolio, trials=trials, apply=do_apply)
 
 
 def _daily_ops_menu(ctx: click.Context) -> None:
@@ -1172,12 +951,11 @@ def _daily_ops_menu(ctx: click.Context) -> None:
         console.print("  2) Inspect ticker")
         console.print("  3) Check exits")
         console.print("  4) Push to Google Sheets")
-        console.print("  [bold magenta]5) Optimize Weights (Optuna)[/bold magenta]")
         console.print("  0) Back")
 
         choice = click.prompt(
             "Select option",
-            type=click.Choice(["1", "2", "3", "4", "5", "0"]),
+            type=click.Choice(["1", "2", "3", "4", "0"]),
         )
 
         if choice == "0":
@@ -1192,18 +970,10 @@ def _daily_ops_menu(ctx: click.Context) -> None:
             ctx.invoke(inspect, ticker=ticker)
         elif choice == "3":
             ctx.invoke(check_exits)
-        # Backtesting was intentionally removed per user request.
-        # Keep this gap documented in code so future AI/developers do not
-        # re-add a daily-ops menu entry unless explicitly asked.
         elif choice == "4":
             portfolio = _prompt_portfolio(default="all")
             sheet_name = click.prompt("Google Sheet name", default="BIST Portfolio Tracker")
             ctx.invoke(push_sheets, portfolio=portfolio, sheet_name=sheet_name)
-        elif choice == "5":
-            portfolio = _prompt_portfolio(default="alpha")
-            trials = click.prompt("Number of trials", type=int, default=100)
-            do_apply = click.confirm("Apply best weights to config?", default=False)
-            ctx.invoke(optimize_weights, portfolio=portfolio, trials=trials, apply=do_apply)
 
 
 def _setup_menu() -> None:
@@ -1274,12 +1044,11 @@ def menu(ctx: click.Context) -> None:
         console.print("  4) Stage-by-stage tools")
         console.print("  5) Daily operations")
         console.print("  6) Setup and configuration")
-        console.print("  [bold magenta]7) Full run + Enhanced (classic + LLM pipeline)[/bold magenta]")
         console.print("  0) Exit")
 
         choice = click.prompt(
             "Select option",
-            type=click.Choice(["1", "2", "3", "4", "5", "6", "7", "0"]),
+            type=click.Choice(["1", "2", "3", "4", "5", "6", "0"]),
         )
 
         try:
@@ -1316,13 +1085,6 @@ def menu(ctx: click.Context) -> None:
                 _daily_ops_menu(ctx)
             elif choice == "6":
                 _setup_menu()
-            elif choice == "7":
-                console.print(
-                    "\n[bold magenta]This runs the classic pipeline + enhanced "
-                    "LLM scoring (requires Gemini API key).[/bold magenta]"
-                )
-                if click.confirm("Run full enhanced pipeline for all stocks?", default=False):
-                    _run_full_pipeline_for_tickers(ctx, (), enhanced=True)
         except Exception as exc:
             console.print(f"[red]Operation failed:[/red] {exc}")
 

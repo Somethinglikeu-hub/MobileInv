@@ -142,9 +142,11 @@ ticker_mapping:
   GUBRF: chemicals
   BAGFS: chemicals
 
-  # Textiles
-  BRISA: textiles
-  ARCLK: textiles  # white goods but closest fit
+  # Automotive (tires / components)
+  BRISA: automotive
+
+  # Consumer electronics / white goods
+  ARCLK: retail_general
 
   # Technology — hardware
   VESTL: technology_hardware
