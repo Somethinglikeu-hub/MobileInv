@@ -43,6 +43,9 @@ logger = logging.getLogger("bist_picker.scoring.factors.dcf")
 _DEFAULT_CONFIG_PATH = (
     Path(__file__).resolve().parent.parent.parent / "config" / "thresholds.yaml"
 )
+_DEFAULT_MACRO_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "config" / "macro.yaml"
+)
 
 # Company types this scorer is applicable to
 _APPLICABLE_TYPES = {"OPERATING", None, ""}
@@ -63,12 +66,20 @@ class DCFScorer:
         config_path: Path to thresholds.yaml. Defaults to config/thresholds.yaml.
     """
 
-    def __init__(self, config_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        config_path: Optional[Path] = None,
+        macro_config_path: Optional[Path] = None,
+    ) -> None:
         self._config_path = config_path or _DEFAULT_CONFIG_PATH
+        self._macro_config_path = macro_config_path or _DEFAULT_MACRO_CONFIG_PATH
         self._cfg: dict = {}
+        self._macro_cfg: dict = {}
         self._load_config()
         # Cache: (scoring_date, resolved_rate). Invalidated when scoring_date changes.
         self._rate_cache: Optional[tuple[Optional[date], float, str]] = None
+        # Cache: (scoring_date, g_terminal, source).
+        self._terminal_growth_cache: Optional[tuple[Optional[date], float, str]] = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -118,8 +129,11 @@ class DCFScorer:
         growth_rate = self._estimate_growth_rate(metrics)
 
         discount_rate, rate_source = self._resolve_discount_rate(session, scoring_date)
+        g_terminal, terminal_source = self._resolve_terminal_growth(session, scoring_date)
 
-        intrinsic = self._compute_intrinsic_value(base_oe, growth_rate, discount_rate)
+        intrinsic = self._compute_intrinsic_value(
+            base_oe, growth_rate, discount_rate, g_terminal=g_terminal,
+        )
         if intrinsic is None or intrinsic <= 0:
             return None
 
@@ -136,6 +150,8 @@ class DCFScorer:
             "growth_rate_used": round(growth_rate, 4),
             "discount_rate_used": round(discount_rate, 4),
             "discount_rate_source": rate_source,
+            "terminal_growth_used": round(g_terminal, 4),
+            "terminal_growth_source": terminal_source,
             "years_projected": self._cfg.get("projection_years", 10),
             "current_price": current_price,
             "margin_of_safety_pct": mos_pct,
@@ -166,9 +182,10 @@ class DCFScorer:
             return self._rate_cache[1], self._rate_cache[2]
 
         static_r = float(self._cfg.get("discount_rate_try", 0.35))
-        g_terminal = float(self._cfg.get("terminal_growth_try", 0.12))
+        # Terminal growth comes from _resolve_terminal_growth (dynamic + clamped).
+        g_terminal, _ = self._resolve_terminal_growth(session, scoring_date)
         dynamic_enabled = bool(self._cfg.get("dynamic_discount_rate", True))
-        erp = float(self._cfg.get("equity_risk_premium_try", 0.06))
+        erp = self._get_erp()
         min_spread = float(self._cfg.get("min_rate_terminal_spread", 0.05))
 
         if not dynamic_enabled:
@@ -290,14 +307,20 @@ class DCFScorer:
         base_oe_per_share: float,
         growth_rate: float,
         discount_rate: Optional[float] = None,
+        g_terminal: Optional[float] = None,
     ) -> Optional[float]:
         """Compute intrinsic value per share via N-year DCF + Gordon terminal value.
 
         If ``discount_rate`` is None, falls back to the static ``discount_rate_try``
         from config. Callers that want the dynamic rate should resolve it first
         via ``_resolve_discount_rate`` and pass the result explicitly.
+
+        If ``g_terminal`` is None, falls back to the static ``terminal_growth_try``
+        from config. Callers that want the dynamic rate should resolve it via
+        ``_resolve_terminal_growth`` and pass the result explicitly.
         """
-        g_terminal = self._cfg.get("terminal_growth_try", 0.12)
+        if g_terminal is None:
+            g_terminal = float(self._cfg.get("terminal_growth_try", 0.08))
         n = self._cfg.get("projection_years", 10)
         r = discount_rate if discount_rate is not None else float(
             self._cfg.get("discount_rate_try", 0.35)
@@ -353,11 +376,86 @@ class DCFScorer:
         return row.close if row else None
 
     def _load_config(self) -> None:
-        """Load DCF parameters from thresholds.yaml."""
+        """Load DCF parameters from thresholds.yaml and macro.yaml."""
         if not self._config_path.exists():
             logger.warning("thresholds.yaml not found at %s; using built-in defaults", self._config_path)
-            return
-        with self._config_path.open("r", encoding="utf-8") as fh:
-            full = yaml.safe_load(fh) or {}
-        self._cfg = full.get("dcf", {})
-        logger.debug("DCFScorer loaded config: %s", self._cfg)
+        else:
+            with self._config_path.open("r", encoding="utf-8") as fh:
+                full = yaml.safe_load(fh) or {}
+            self._cfg = full.get("dcf", {})
+            logger.debug("DCFScorer loaded dcf config: %s", self._cfg)
+
+        if self._macro_config_path.exists():
+            with self._macro_config_path.open("r", encoding="utf-8") as fh:
+                self._macro_cfg = yaml.safe_load(fh) or {}
+            logger.debug("DCFScorer loaded macro config: %s", self._macro_cfg)
+        else:
+            logger.info(
+                "macro.yaml not found at %s; DCF will use thresholds.yaml "
+                "equity_risk_premium_try / terminal_growth_try only",
+                self._macro_config_path,
+            )
+
+    def _get_erp(self) -> float:
+        """Return the equity risk premium to use in dynamic discount rate.
+
+        Priority: macro.yaml -> thresholds.yaml -> 0.06 default.
+        """
+        erp_block = self._macro_cfg.get("erp", {}) or {}
+        if "equity_risk_premium_try" in erp_block:
+            return float(erp_block["equity_risk_premium_try"])
+        return float(self._cfg.get("equity_risk_premium_try", 0.06))
+
+    def _resolve_terminal_growth(
+        self,
+        session: Session,
+        scoring_date: Optional[date] = None,
+    ) -> tuple[float, str]:
+        """Return (terminal_growth, source) for the current scoring run.
+
+        Priority:
+          1. MacroRegime.inflation_expectation_24m_pct + macro.yaml real_growth_pct
+          2. thresholds.yaml terminal_growth_try (static fallback)
+
+        Clamped to macro.yaml [min_floor, max_ceiling].
+        Result is cached per scoring_date within a single scorer instance.
+        """
+        if (
+            self._terminal_growth_cache is not None
+            and self._terminal_growth_cache[0] == scoring_date
+        ):
+            return self._terminal_growth_cache[1], self._terminal_growth_cache[2]
+
+        static_g = float(self._cfg.get("terminal_growth_try", 0.08))
+        tg_block = self._macro_cfg.get("terminal_growth", {}) or {}
+        real_growth = float(tg_block.get("real_growth_pct", 0.02))
+        floor = float(tg_block.get("min_floor", 0.05))
+        ceiling = float(tg_block.get("max_ceiling", 0.15))
+
+        query = session.query(MacroRegime).filter(
+            MacroRegime.inflation_expectation_24m_pct.isnot(None),
+        )
+        if scoring_date is not None:
+            query = query.filter(MacroRegime.date <= scoring_date)
+        latest = query.order_by(MacroRegime.date.desc()).first()
+
+        if latest is None or latest.inflation_expectation_24m_pct is None:
+            clamped = max(floor, min(ceiling, static_g))
+            logger.info(
+                "No TCMB 24m inflation expectation found; terminal growth = "
+                "static %.2f%% (clamped)", clamped * 100,
+            )
+            self._terminal_growth_cache = (scoring_date, clamped, "static_fallback")
+            return clamped, "static_fallback"
+
+        exp = float(latest.inflation_expectation_24m_pct)
+        dyn_g = exp + real_growth
+        clamped = max(floor, min(ceiling, dyn_g))
+        logger.info(
+            "DCF terminal growth: %.2f%% (24m CPI exp %.2f%% + real %.2f%%, "
+            "clamped to [%.2f%%, %.2f%%], as of %s)",
+            clamped * 100, exp * 100, real_growth * 100,
+            floor * 100, ceiling * 100, latest.date,
+        )
+        self._terminal_growth_cache = (scoring_date, clamped, "dynamic_cpi_plus_real")
+        return clamped, "dynamic_cpi_plus_real"

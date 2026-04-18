@@ -22,10 +22,16 @@ dcf:
   #   - MacroRegime has no policy rate on or before scoring_date
   #   - dynamic rate would leave less than min_rate_terminal_spread above terminal growth
   dynamic_discount_rate: true
-  equity_risk_premium_try: 0.06   # ERP applied on top of TRY policy rate
+  # ERP fallback. At runtime the DCF scorer prefers macro.yaml erp.equity_risk_premium_try
+  # (Damodaran, manually updated) over this value. Kept for legacy callers.
+  equity_risk_premium_try: 0.06
   min_rate_terminal_spread: 0.05  # enforce r - g_terminal >= 5% for dynamic path
-  discount_rate_try: 0.35         # static fallback
-  terminal_growth_try: 0.12       # ~3% real + ~9% long-run inflation
+  discount_rate_try: 0.35         # static fallback for discount rate
+  # Static terminal growth fallback. At runtime DCF prefers
+  # MacroRegime.inflation_expectation_24m_pct + macro.yaml real_growth_pct.
+  # Lowered 0.12 -> 0.08 to reflect more realistic long-run TRY nominal
+  # (~6% expected CPI + 2% real growth) when the dynamic path is unavailable.
+  terminal_growth_try: 0.08
   projection_years: 10
   maintenance_capex_pct: 0.70     # approximate maintenance as 70% of total capex
   min_growth_rate: 0.05           # floor: inflation pass-through minimum

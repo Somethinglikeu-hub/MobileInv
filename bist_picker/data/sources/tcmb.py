@@ -173,6 +173,63 @@ class TCMBClient:
 
         return None
 
+    # Candidate series codes for the TCMB Market Participants Survey
+    # 24-month-ahead CPI expectation. Tried in order; first non-empty wins.
+    # TCMB has renamed these over the years — defensive multi-try avoids
+    # pipeline failure when one code is retired.
+    _INFLATION_EXP_24M_SERIES = (
+        "TP.ENF.BEK24",       # Türkçe EVDS standard naming
+        "TP.BEKMP.SM24",      # Survey of Market Participants, 24m mean
+        "TP.BEKODTUFEYENI.BT02",  # Post-2018 inflation expectations block
+    )
+
+    def fetch_inflation_expectations_24m(self) -> Optional[float]:
+        """Fetch the TCMB 24-month-ahead CPI expectation (Market Participants Survey).
+
+        Tries several known series codes for robustness. Returns the most
+        recent non-null value as a decimal (e.g., 0.18 = 18%), or None if
+        none of the candidate series return data.
+
+        Falls back gracefully so DCF terminal growth can keep using its
+        static config default when EVDS is unavailable or series codes
+        have been renamed.
+        """
+        if not self._api_key:
+            return None
+
+        end = date.today()
+        start = end - timedelta(days=180)  # survey is monthly, 6 months headroom
+
+        for series in self._INFLATION_EXP_24M_SERIES:
+            items = self._fetch_evds(series, start, end, frequency=5)
+            if not items:
+                continue
+
+            # Key in the response is the series with dots → underscores
+            value_key = series.replace(".", "_")
+            for item in reversed(items):
+                val = item.get(value_key)
+                if val is None or val == "":
+                    continue
+                try:
+                    rate = float(val) / 100.0
+                    logger.info(
+                        "Fetched 24m inflation expectation %.2f%% from %s",
+                        rate * 100, series,
+                    )
+                    return rate
+                except (ValueError, TypeError):
+                    continue
+
+        logger.warning(
+            "No 24m inflation expectation series returned data from EVDS. "
+            "Tried: %s. DCF will fall back to static terminal_growth_try. "
+            "If this persists, update _INFLATION_EXP_24M_SERIES with the "
+            "current EVDS code from https://evds3.tcmb.gov.tr/.",
+            ", ".join(self._INFLATION_EXP_24M_SERIES),
+        )
+        return None
+
     def get_inflation_rate(self, months_back: int = 12) -> Optional[float]:
         """Calculate YoY CPI inflation rate.
 

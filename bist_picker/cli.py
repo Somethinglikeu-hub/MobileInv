@@ -817,6 +817,33 @@ def export_mobile_feed_command(
     )
 
 
+@cli.command(name="macro-check")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit a structured JSON report (used by GitHub Actions to build issues).",
+)
+@click.pass_context
+def macro_check_command(ctx: click.Context, as_json: bool) -> None:
+    """Report macro.yaml fields that are past their ``stale_after_days`` window.
+
+    Exits with code 1 when any field is stale (GitHub Actions uses this
+    to decide whether to open a refresh-reminder issue), 0 otherwise.
+    """
+    from bist_picker.macro_check import _format_human, check_macro_staleness
+
+    report = check_macro_staleness()
+    if as_json:
+        click.echo(report.to_json())
+    else:
+        console.print(_format_human(report))
+
+    if report.is_stale:
+        ctx.exit(1)
+
+
 def _mask_secret(value: str) -> str:
     """Mask secrets for display without exposing full value."""
     if not value:

@@ -1,0 +1,30 @@
+# BIST Stock Picker — Macro inputs requiring periodic manual review.
+#
+# These values don't have a reliable scraper-less API for Turkey, so they
+# live here as configuration. The pipeline checks the `last_updated` date
+# on every run and opens a GitHub issue when the value is stale
+# (>90 days), so you get a mobile notification when a refresh is due.
+#
+# To update:
+#   1. Open https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html
+#   2. Find the "Turkey" row → copy the "Equity Risk Premium" column value
+#   3. Divide by 100 if the source shows a percentage (e.g., 9.52% → 0.0952)
+#   4. Update `equity_risk_premium_try` and bump `last_updated` to today
+#   5. Commit + push; next pipeline run clears the stale-macro issue
+
+erp:
+  # Damodaran-style Turkey Equity Risk Premium = US ERP + Country Risk Premium.
+  # Source: NYU Stern Damodaran ctryprem.xls (updated monthly by the author).
+  # Manual update because no free API returns Turkey sovereign CDS / EMBI spread.
+  equity_risk_premium_try: 0.0952
+  last_updated: "2025-07-01"       # YYYY-MM-DD — bump whenever you refresh the value
+  source_url: "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html"
+  stale_after_days: 90             # pipeline opens a GitHub issue past this age
+
+terminal_growth:
+  # When MacroRegime.inflation_expectation_24m_pct is populated (TCMB Market
+  # Participants Survey), DCF uses:  g_terminal = expected_cpi_24m + real_growth_pct
+  # Fallback to `terminal_growth_try` in thresholds.yaml when TCMB data missing.
+  real_growth_pct: 0.02            # long-run real GDP growth pass-through (~2%)
+  min_floor: 0.05                  # clamp: never go below 5% nominal
+  max_ceiling: 0.15                # clamp: never go above 15% nominal
