@@ -13,6 +13,7 @@ from sqlalchemy import or_
 from bist_picker import read_service
 from bist_picker.api.schemas import (
     AdjustedMetricsResponse,
+    CashStateSnapshot,
     CompanyInfoResponse,
     HealthResponse,
     HomePerformance,
@@ -158,6 +159,7 @@ def get_home() -> HomeResponse:
     open_positions = read_service.get_open_positions()
     history = read_service.get_portfolio_history()
     macro = read_service.get_latest_macro()
+    cash = read_service.get_latest_cash_state()
 
     return HomeResponse(
         performance=HomePerformance(
@@ -203,6 +205,7 @@ def get_home() -> HomeResponse:
             )
         ],
         macro=MacroSnapshot(**{key: _normalize_value(value) for key, value in (macro or {}).items()}) if macro else None,
+        cash=CashStateSnapshot(**{key: _normalize_value(value) for key, value in (cash or {}).items()}) if cash else None,
     )
 
 

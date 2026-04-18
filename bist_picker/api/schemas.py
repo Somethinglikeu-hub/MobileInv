@@ -67,11 +67,28 @@ class MacroSnapshot(BaseModel):
     regime_date: str | None = None
 
 
+class CashStateSnapshot(BaseModel):
+    """Phase 4: current cash-out state surfaced to the APK."""
+
+    date: str | None = None
+    state: str | None = None            # NORMAL / CAUTION / DEFENSIVE / RISK_OFF
+    cash_pct: float | None = None       # 0.0, 0.25, 0.50, 0.75
+    target_state: str | None = None     # what the signal alone would pick
+    market_regime: str | None = None
+    macro_regime: str | None = None
+    raw_signal: int | None = None
+    days_in_state: int | None = None
+    last_transition_date: str | None = None
+    transitioned_today: bool | None = None
+    notes: str | None = None
+
+
 class HomeResponse(BaseModel):
     performance: HomePerformance
     open_positions: list[OpenPosition]
     portfolio_history: list[PortfolioHistoryItem]
     macro: MacroSnapshot | None = None
+    cash: CashStateSnapshot | None = None
 
 
 class ScoringOptionsResponse(BaseModel):

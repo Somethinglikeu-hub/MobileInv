@@ -40,6 +40,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from bist_picker.db.schema import Company, DailyPrice, PortfolioSelection, ScoringResult
+from bist_picker.portfolio.cash_signal import (
+    CashSignalCalculator,
+    CashSignalResult,
+)
 from bist_picker.portfolio.universes import UniverseBuilder
 
 logger = logging.getLogger(__name__)
@@ -283,22 +287,38 @@ class PortfolioSelector:
                 results[portfolio.lower()] = []
         return results
 
-    def select_and_store(self, session: Session) -> dict:
+    def select_and_store(
+        self,
+        session: Session,
+        cash_signal: Optional[CashSignalResult] = None,
+    ) -> dict:
         """Select for all portfolios and persist results to portfolio_selections.
 
         Existing rows for the same portfolio + selection_date + company_id are
         updated in place; new rows are inserted.
-        
+
         Monthly Rebalancing Logic:
           Before storing new picks, all existing open positions (exit_date IS NULL)
           for the active portfolios are marked as 'exited' with the current close
-          price and scoring_date as exit_date. Then, new picks are stored as 
-          open positions. This ensures "Open Positions" only reflects the 
+          price and scoring_date as exit_date. Then, new picks are stored as
+          open positions. This ensures "Open Positions" only reflects the
           most recent month's selection.
 
+        Phase 4 — Cash allocation:
+          A :class:`CashSignalResult` may be supplied explicitly. When omitted
+          the selector evaluates the signal itself (preserving backwards
+          compatibility for callers that don't know about cash state). The
+          returned ``cash_pct`` scales every pick weight so
+          ``sum(weights) == 1 - cash_pct``.
+
         Returns:
-            Same dict as select_all().
+            Same dict as select_all(); each pick additionally carries a
+            ``weight`` float.
         """
+        # Resolve the cash signal first so it can be stamped on every pick row.
+        if cash_signal is None:
+            cash_signal = CashSignalCalculator().compute(session, self.scoring_date)
+
         all_picks = self.select_all(session)
 
         # Safety net: enforce max_target_multiple cap
@@ -309,6 +329,18 @@ class PortfolioSelector:
                 target = pick.get("target_price")
                 if entry and target and target > entry * max_multiple:
                     pick["target_price"] = round(entry * max_multiple, 2)
+
+        # Apply cash-scaled weights: (1 - cash_pct) is the total equity budget,
+        # split equally among the surviving picks.
+        invested_fraction = max(0.0, 1.0 - cash_signal.cash_pct)
+        for picks in all_picks.values():
+            if not picks:
+                continue
+            per_pick_weight = invested_fraction / len(picks)
+            for pick in picks:
+                pick["weight"] = per_pick_weight
+                pick["cash_state"] = cash_signal.state
+                pick["cash_pct"] = cash_signal.cash_pct
 
         for portfolio_key, picks in all_picks.items():
             p_upper = portfolio_key.upper()
@@ -379,6 +411,9 @@ class PortfolioSelector:
                     existing.target_price = pick["target_price"]
                     existing.stop_loss_price = pick["stop_loss"]
                     existing.entry_price = pick["entry_price"]
+                    existing.weight = pick.get("weight")
+                    existing.cash_state = pick.get("cash_state")
+                    existing.cash_pct = pick.get("cash_pct")
                 else:
                     session.add(
                         PortfolioSelection(
@@ -389,6 +424,9 @@ class PortfolioSelector:
                             composite_score=pick["score"],
                             target_price=pick["target_price"],
                             stop_loss_price=pick["stop_loss"],
+                            weight=pick.get("weight"),
+                            cash_state=pick.get("cash_state"),
+                            cash_pct=pick.get("cash_pct"),
                         )
                     )
 

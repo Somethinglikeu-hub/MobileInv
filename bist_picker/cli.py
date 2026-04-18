@@ -844,6 +844,111 @@ def macro_check_command(ctx: click.Context, as_json: bool) -> None:
         ctx.exit(1)
 
 
+@cli.command(name="cash-status")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit a structured JSON report (used by GitHub Actions to build issues).",
+)
+@click.option(
+    "--compute",
+    is_flag=True,
+    default=False,
+    help=(
+        "Force a fresh compute for today using the live regime classifiers "
+        "and persist the row. Without this flag the command only reads the "
+        "most recently persisted state."
+    ),
+)
+@click.pass_context
+def cash_status_command(ctx: click.Context, as_json: bool, compute: bool) -> None:
+    """Report the current Phase 4 cash-allocation state.
+
+    Exits with code 1 when the state transitioned on the most recent row
+    (GitHub Actions uses this to decide whether to open a state-change
+    tracking issue).
+    """
+    import json as _json
+    from datetime import date as _date
+
+    from bist_picker import read_service
+    from bist_picker.db.connection import ensure_runtime_db_ready, session_scope
+    from bist_picker.portfolio.cash_signal import (
+        CashSignalCalculator,
+        CashSignalConfig,
+        next_possible_transition_date,
+    )
+    from bist_picker.db.schema import CashAllocationState
+
+    ensure_runtime_db_ready()
+
+    cfg = CashSignalConfig.load()
+
+    if compute:
+        with session_scope() as session:
+            result = CashSignalCalculator(cfg).compute(session, _date.today())
+        state = {
+            "date": result.date,
+            "state": result.state,
+            "cash_pct": result.cash_pct,
+            "target_state": result.target_state,
+            "market_regime": result.market_regime,
+            "macro_regime": result.macro_regime,
+            "raw_signal": result.raw_signal,
+            "days_in_state": result.days_in_state,
+            "last_transition_date": result.last_transition_date,
+            "transitioned_today": result.transitioned_today,
+            "notes": result.notes,
+        }
+    else:
+        state = read_service.get_latest_cash_state()
+
+    if state is None:
+        if as_json:
+            click.echo(_json.dumps({"state": None, "message": "no cash state persisted yet"}))
+        else:
+            console.print("[yellow]No cash state persisted yet. Run `pick` or pass --compute.[/yellow]")
+        return
+
+    # Compute the earliest date the cooldown will release another transition.
+    next_tx: _date | None = None
+    if state.get("last_transition_date"):
+        with session_scope() as session:
+            row = (
+                session.query(CashAllocationState)
+                .order_by(CashAllocationState.date.desc())
+                .first()
+            )
+            if row is not None:
+                next_tx = next_possible_transition_date(row, cfg)
+
+    if as_json:
+        payload = {
+            **{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in state.items()},
+            "enabled": cfg.enabled,
+            "next_possible_transition_date": next_tx.isoformat() if next_tx else None,
+        }
+        click.echo(_json.dumps(payload))
+    else:
+        console.print(f"[bold]Cash allocation state[/bold] as of {state['date']}")
+        console.print(f"  state:            [cyan]{state['state']}[/cyan]  (cash_pct={state['cash_pct']:.0%})")
+        console.print(f"  target (raw):     {state['target_state']}  (market={state['market_regime']}, macro={state['macro_regime']}, raw={state['raw_signal']})")
+        console.print(f"  days in state:    {state['days_in_state']}")
+        if state.get("last_transition_date"):
+            console.print(f"  last transition:  {state['last_transition_date']}")
+        if next_tx is not None:
+            console.print(f"  next allowed:     {next_tx}")
+        if state.get("notes"):
+            console.print(f"  notes:            {state['notes']}")
+        if not cfg.enabled:
+            console.print("  [yellow]kill-switch is engaged: state forced to NORMAL[/yellow]")
+
+    if state.get("transitioned_today"):
+        ctx.exit(1)
+
+
 def _mask_secret(value: str) -> str:
     """Mask secrets for display without exposing full value."""
     if not value:
