@@ -1,5 +1,8 @@
 ## Mobile Cloud Sync
 
+> **Project state:** See `PROJECT_STATE.md` in the Android repo root for current
+> scoring/DCF/portfolio parameters. Last refactor: PR #3 (2026-04-17).
+
 This repo powers the zero-PC mobile flow:
 
 1. GitHub Actions restores the latest runtime DB from `MobileInv-state`.
