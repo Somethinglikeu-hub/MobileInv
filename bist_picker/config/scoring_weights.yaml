@@ -10,24 +10,6 @@ alpha:
   technical: 0.05
   dividend_yield: 0.00
 
-beta:
-  quality_buffett: 0.10
-  value_graham_dcf: 0.10
-  piotroski: 0.10
-  growth: 0.35
-  momentum: 0.25
-  technical: 0.10
-  dividend_yield: 0.00
-
-delta:
-  quality_buffett: 0.10
-  value_graham_dcf: 0.10
-  piotroski: 0.05
-  growth: 0.35
-  momentum: 0.20
-  technical: 0.20
-  dividend_yield: 0.00
-
 # Model-specific overrides (applied to all portfolios for these company types)
 holding:
   nav_discount: 0.35
@@ -57,31 +39,6 @@ ipo:
   ps_ratio_vs_sector: 0.20
   insider_retention: 0.15
   liquidity: 0.15
-
-# Enhanced Pipeline weights (V2.5) - currently NOT wired into the active composer.
-# ``insider_cluster`` was removed together with the classic insider factor because
-# BIST does not expose a reliable insider-transaction feed; its weight has been
-# redistributed across event_score / macro_nowcast / analyst_tone.
-enhanced_alpha:
-  classic_weight: 0.70
-  enhanced_weight: 0.30
-  event_score: 0.50
-  macro_nowcast: 0.30
-  analyst_tone: 0.20
-
-enhanced_beta:
-  classic_weight: 0.65
-  enhanced_weight: 0.35
-  event_score: 0.40
-  macro_nowcast: 0.35
-  analyst_tone: 0.25
-
-enhanced_delta:
-  classic_weight: 0.60
-  enhanced_weight: 0.40
-  event_score: 0.35
-  macro_nowcast: 0.40
-  analyst_tone: 0.25
 
 # Regime-dependent weight overrides for ALPHA / BETA / DELTA.
 # Each block must sum to 1.0 (validated at load time).

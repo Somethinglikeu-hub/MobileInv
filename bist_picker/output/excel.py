@@ -80,19 +80,14 @@ class ExcelReporter:
         )
 
         # Portfolio pick counts
-        pick_counts = {}
-        # NOTE: BETA and DELTA commented out — only ALPHA portfolio is active.
-        # To re-enable, uncomment "BETA" and "DELTA" in the tuple below.
-        for pname in ("ALPHA",):  # "BETA", "DELTA"):
-            cnt = (
-                session.query(PortfolioSelection)
-                .filter(
-                    PortfolioSelection.portfolio == pname,
-                    PortfolioSelection.selection_date == scoring_date,
-                )
-                .count()
+        alpha_picks = (
+            session.query(PortfolioSelection)
+            .filter(
+                PortfolioSelection.portfolio == "ALPHA",
+                PortfolioSelection.selection_date == scoring_date,
             )
-            pick_counts[pname] = cnt
+            .count()
+        )
 
         summary = pd.DataFrame(
             {
@@ -102,8 +97,6 @@ class ExcelReporter:
                     "BIST-100 Companies",
                     "Scored Companies",
                     "ALPHA Picks",
-                    # "BETA Picks",
-                    # "DELTA Picks",
                     "Engine",
                 ],
                 "Value": [
@@ -111,9 +104,7 @@ class ExcelReporter:
                     total,
                     bist100,
                     scored,
-                    pick_counts.get("ALPHA", 0),
-                    # pick_counts.get("BETA", 0),
-                    # pick_counts.get("DELTA", 0),
+                    alpha_picks,
                     "BIST Stock Picker V2",
                 ],
             }
@@ -125,9 +116,7 @@ class ExcelReporter:
         """One sheet per portfolio with picks, prices, and key metrics."""
         scoring_date = date.today()
 
-        # NOTE: BETA and DELTA sheets commented out — only ALPHA is generated.
-        # To re-enable, uncomment "BETA" and "DELTA" in the tuple below.
-        for pname in ("ALPHA",):  # "BETA", "DELTA"):
+        for pname in ("ALPHA",):
             picks = (
                 session.query(PortfolioSelection, Company)
                 .join(Company, Company.id == PortfolioSelection.company_id)
@@ -225,8 +214,6 @@ class ExcelReporter:
                     "Insider": _round(sr.insider_score),
                     "Technical": _round(sr.technical_score),
                     "Alpha": _round(sr.composite_alpha),
-                    # "Beta": _round(sr.composite_beta),   # Commented out — only ALPHA active
-                    # "Delta": _round(sr.composite_delta),  # Commented out — only ALPHA active
                     "Risk Tier": sr.risk_tier or "",
                     "Data %": _round(sr.data_completeness),
                     "Free Float %": _round(comp.free_float_pct),

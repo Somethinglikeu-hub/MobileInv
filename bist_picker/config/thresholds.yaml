@@ -71,20 +71,6 @@ filters:
     min_avg_volume_try: 10_000_000
     min_data_completeness: 70.0
     min_fscore: 5
-  beta:
-    risk_tier: MEDIUM
-    ipo_eligible: true
-    min_free_float: 25.0
-    min_avg_volume_try: 10_000_000
-    min_data_completeness: 60.0
-    min_fscore: 3
-  delta:
-    bist100_only: true
-    min_free_float: 30.0
-    min_avg_volume_try: 25_000_000
-    min_data_completeness: 60.0
-    min_fscore: 3
-
 alpha_research:
   quality_shadow_raw_fscore: 4
   free_float_shadow_min: 15.0
@@ -222,19 +208,6 @@ technical_enhanced:
   sr_resistance_zone: 0.95     # Top 5% of range = at resistance (signal 0.0)
   sr_upper_zone: 0.75          # Top 25% of range = upper zone (signal 0.5)
   min_rows_sr: 252             # Minimum data requirement (1 year)
-
-insider:
-  lookback_3m_days: 91            # calendar days for the 3-month window
-  lookback_6m_days: 182           # calendar days for the 6-month window
-  weight_3m: 0.60                 # weight for 3-month signal (more timely)
-  weight_6m: 0.40                 # weight for 6-month signal
-  min_market_cap_for_pct: 100_000_000  # 100M TRY minimum to use % normalisation
-  role_weights:
-    BOARD: 1.0                    # board members — highest conviction
-    CEO: 1.0                      # CEO — highest conviction
-    MAJOR_SHAREHOLDER: 0.8        # large holders — informative but may hedge
-    RELATED: 0.5                  # family/related — lower weight
-    OTHER: 0.5                    # unknown/other roles — conservative default
 
 quality_flags:
   late_filing_days: 75         # flag if publication_date > period_end + 75 days
