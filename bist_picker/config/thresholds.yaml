@@ -42,11 +42,16 @@ piotroski:
   min_fscore: 4                # minimum to be considered investable
 
 selection:
-  max_correlation: 0.85        # max pairwise correlation between portfolio picks
+  # Phase 3 tightening (2026-04-18): lowered from 0.85 to 0.70 to force
+  # the portfolio toward genuinely independent bets. Pairs above 0.70
+  # realized return correlation are filtered from the candidate list.
+  max_correlation: 0.70
   correlation_lookback_days: 120  # days of return history for correlation check
   max_target_multiple: 2.5     # cap: target <= entry * 2.5 (150% upside)
   target_count: 5
-  max_per_sector: 3            # with 5 picks allow up to 3 from same sub-sector
+  # Phase 3 tightening: 3 -> 2. With 5 picks this guarantees coverage of at
+  # least 3 distinct sub-sectors (previously one sector could dominate).
+  max_per_sector: 2
   max_banks_per_portfolio: 2   # scaled with larger portfolio
   min_fscore: 4
   min_data_completeness: 60.0

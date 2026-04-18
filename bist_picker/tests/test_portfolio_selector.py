@@ -105,7 +105,8 @@ class TestPortfolioSelector:
         picks = selector.select("ALPHA", session)
         picked_tickers = {pick["ticker"] for pick in picks}
 
-        # With max_per_sector=3 and only 4 candidates (3 Tech + 1 Industrial),
-        # all 4 are eligible; target_count=5 caps it at 4.
-        assert len(picks) == 4
-        assert picked_tickers == {"AAA1", "AAA2", "AAA3", "BBB1"}
+        # Phase 3 tightening: max_per_sector=2. Of the 3 Tech candidates only
+        # the top 2 by composite score survive the sector cap; the single
+        # Industrial candidate also makes it in.
+        assert len(picks) == 3
+        assert picked_tickers == {"AAA1", "AAA2", "BBB1"}

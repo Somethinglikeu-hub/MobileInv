@@ -55,12 +55,14 @@ _PORTFOLIO_SCORE_COL: dict[str, str] = {
     "DELTA": "composite_delta",
 }
 _PICKS_PER_PORTFOLIO: int = 5
-_MAX_PER_SECTOR: int = 3
+# Phase 3 tightening (2026-04-18): 3 -> 2 so a single sector cannot dominate.
+_MAX_PER_SECTOR: int = 2
 _MAX_BANKS: int = 2
 _TOP_N_FOR_TURNOVER: int = 10       # Incumbents protected if still in top 10
 _TURNOVER_THRESHOLD: float = 1.15   # New candidate must be 15% better to replace
 _STOP_LOSS_FACTOR: float = 0.82     # stop_loss = entry_price * 0.82 (fallback)
-_MAX_CORRELATION: float = 0.85       # max pairwise correlation between picks
+# Phase 3 tightening: 0.85 -> 0.70 for genuinely independent bets.
+_MAX_CORRELATION: float = 0.70       # max pairwise correlation between picks
 _CORRELATION_LOOKBACK: int = 120     # days of return history for correlation
 _ATR_PERIOD: int = 20                # days for ATR calculation
 _ATR_MULTIPLIER: float = 2.0         # stop = entry - (ATR × multiplier)
