@@ -33,6 +33,16 @@ _RUNTIME_SQLITE_COLUMN_ADDS: dict[tuple[str, str], str] = {
         "ALTER TABLE macro_regime "
         "ADD COLUMN inflation_expectation_24m_pct REAL"
     ),
+    # Phase 4: per-pick weight + cash state snapshot on portfolio_selections.
+    ("portfolio_selections", "weight"): (
+        "ALTER TABLE portfolio_selections ADD COLUMN weight REAL"
+    ),
+    ("portfolio_selections", "cash_state"): (
+        "ALTER TABLE portfolio_selections ADD COLUMN cash_state VARCHAR(20)"
+    ),
+    ("portfolio_selections", "cash_pct"): (
+        "ALTER TABLE portfolio_selections ADD COLUMN cash_pct REAL"
+    ),
 }
 
 _RUNTIME_SQLITE_INDEXES: dict[str, str] = {

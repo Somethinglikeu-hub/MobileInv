@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from bist_picker.db.connection import get_engine
 from bist_picker.db.schema import (
     AdjustedMetric,
+    CashAllocationState,
     Company,
     DailyPrice,
     MacroRegime,
@@ -1388,6 +1389,38 @@ def get_latest_macro() -> Optional[dict]:
     session = _get_session()
     try:
         return _load_latest_macro(session)
+    finally:
+        session.close()
+
+
+def get_latest_cash_state() -> Optional[dict]:
+    """Phase 4: return the most recent persisted cash-allocation state.
+
+    The row is flattened into a plain dict so both the mobile snapshot writer
+    and the API layer can consume it without importing the ORM model.
+    """
+    session = _get_session()
+    try:
+        row = (
+            session.query(CashAllocationState)
+            .order_by(CashAllocationState.date.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return {
+            "date": row.date,
+            "market_regime": row.market_regime,
+            "macro_regime": row.macro_regime,
+            "raw_signal": row.raw_signal,
+            "target_state": row.target_state,
+            "state": row.state,
+            "cash_pct": row.cash_pct,
+            "days_in_state": row.days_in_state,
+            "last_transition_date": row.last_transition_date,
+            "transitioned_today": row.transitioned_today,
+            "notes": row.notes,
+        }
     finally:
         session.close()
 

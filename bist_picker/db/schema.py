@@ -251,6 +251,14 @@ class PortfolioSelection(Base):
     exit_reason: Optional[str] = Column(String(20))  # REBALANCE / STOP_LOSS / TARGET / THESIS_BREAK
     return_pct: Optional[float] = Column(Float)
     holding_days: Optional[int] = Column(Integer)
+    # Phase 4: portfolio weight for this pick, in [0, 1]. At NORMAL cash state
+    # every pick has weight = 1/target_count; as the cash state tightens we
+    # scale each weight down so (sum of weights) = 1 - cash_pct.
+    weight: Optional[float] = Column(Float)
+    # Snapshot of the cash state at selection time (handy for UI + audit so we
+    # don't have to cross-join cash_allocation_state by date).
+    cash_state: Optional[str] = Column(String(20))
+    cash_pct: Optional[float] = Column(Float)
     created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)
     updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
@@ -273,6 +281,43 @@ class MacroRegime(Base):
     inflation_expectation_24m_pct: Optional[float] = Column(Float)
     regime: Optional[str] = Column(String(20))  # RISK_ON / RISK_OFF / TRANSITION
     weight_adjustments_json: Optional[str] = Column(Text)
+    created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class CashAllocationState(Base):
+    """Phase 4: daily persisted state of the portfolio cash-out signal.
+
+    One row per business day. The state machine reads prior rows to evaluate
+    hysteresis (up/down confirmation windows) and the minimum holding period
+    before deciding whether the current day permits a transition.
+    """
+
+    __tablename__ = "cash_allocation_state"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    date: date = Column(Date, nullable=False, unique=True, index=True)
+
+    # Inputs at the time of evaluation -- persisted for auditability and so
+    # tests / back-diagnosis don't need to re-run the classifiers.
+    market_regime: Optional[str] = Column(String(20))   # BULL_LOW_VOL / BULL_HIGH_VOL / BEAR
+    macro_regime: Optional[str] = Column(String(20))    # RISK_ON / NEUTRAL / RISK_OFF
+    raw_signal: int = Column(Integer, nullable=False)   # 0..4 combined stress score
+
+    # The state the raw_signal ALONE would pick -- useful to show the user
+    # "pending" transitions that are blocked by cooldown / confirmation.
+    target_state: str = Column(String(20), nullable=False)
+
+    # The state actually applied after hysteresis + cooldown + step-limit.
+    state: str = Column(String(20), nullable=False)     # NORMAL / CAUTION / DEFENSIVE / RISK_OFF
+    cash_pct: float = Column(Float, nullable=False)
+
+    # Ancillary metadata for the UI and issue-notification layer.
+    days_in_state: int = Column(Integer, nullable=False, default=1)
+    last_transition_date: Optional[date] = Column(Date)
+    transitioned_today: bool = Column(Boolean, nullable=False, default=False)
+    notes: Optional[str] = Column(Text)   # e.g. "held by cooldown", "kill-switch disabled"
+
     created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)
     updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

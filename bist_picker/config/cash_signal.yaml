@@ -1,0 +1,61 @@
+# Phase 4 — Cash-out signal configuration
+#
+# The cash signal blends the Market Regime (XU100 price + volatility) with the
+# Macro Regime (Turkey CDS + real rates) into a single 4-level state machine.
+# Transitions are deliberately sticky to avoid whipsaw on short-lived signals.
+#
+# Decision algorithm (evaluated once per pipeline run, usually daily):
+#   raw_signal = market_score + macro_score   (range 0..4)
+#       market_score: BULL_LOW_VOL=0, BULL_HIGH_VOL=1, BEAR=2
+#       macro_score:  RISK_ON=0, NEUTRAL=1, RISK_OFF=2
+#   target_state:
+#       raw <= 1 -> NORMAL      (stress 0)
+#       raw == 2 -> CAUTION     (stress 1)
+#       raw == 3 -> DEFENSIVE   (stress 2)
+#       raw == 4 -> RISK_OFF    (stress 3)
+#   The state machine then applies hysteresis and a cooldown before moving.
+
+enabled: true
+
+# Kill-switch sanity: if disabled, the pipeline still logs the raw signal and a
+# "would-be" state but the portfolio weights are untouched (cash_pct stays at 0).
+
+states:
+  NORMAL:
+    cash_pct: 0.0
+    stress_level: 0
+  CAUTION:
+    cash_pct: 0.25
+    stress_level: 1
+  DEFENSIVE:
+    cash_pct: 0.50
+    stress_level: 2
+  RISK_OFF:
+    cash_pct: 0.75
+    stress_level: 3
+
+hysteresis:
+  # Days the raw signal must stay AT OR ABOVE the next stress level before the
+  # state machine moves up (toward cash). Short window -> reacts to real stress
+  # faster than to noise.
+  up_confirmation_days: 5
+
+  # Days the raw signal must stay AT OR BELOW the next-lower stress level
+  # before the machine moves down (back toward full exposure). Longer window
+  # -> we are deliberately reluctant to re-risk after a scare.
+  down_confirmation_days: 10
+
+  # After any transition the state is locked for this many business days.
+  # Guarantees picks are not churned more than once per ~month even if the
+  # signal whipsaws.
+  min_holding_days: 20
+
+  # Maximum jump per transition event. Keeping this at 1 forces the machine
+  # to walk through intermediate states (NORMAL -> CAUTION -> DEFENSIVE),
+  # which both smooths the experience and gives the user visible warning.
+  max_step_per_transition: 1
+
+notifications:
+  # When true, the GitHub Actions workflow opens a tracking issue every time
+  # the state changes (e.g. "Portfolio moved CAUTION -> DEFENSIVE on 2026-05-03").
+  open_issue_on_change: true

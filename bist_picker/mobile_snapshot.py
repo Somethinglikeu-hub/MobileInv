@@ -98,7 +98,12 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             policy_rate_pct REAL,
             cpi_yoy_pct REAL,
             usdtry_rate REAL,
-            regime TEXT
+            regime TEXT,
+            cash_state TEXT,
+            cash_pct REAL,
+            cash_days_in_state INTEGER,
+            cash_last_transition_date TEXT,
+            cash_target_state TEXT
         );
 
         CREATE TABLE open_positions (
@@ -292,6 +297,7 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
     try:
         performance = read_service.get_all_portfolio_performance() or {}
         macro = read_service.get_latest_macro() or {}
+        cash_state = read_service.get_latest_cash_state() or {}
         open_positions_frame = read_service.get_open_positions()
         portfolio_history_frame = read_service.get_portfolio_history()
         scoring_frame = read_service.get_scoring_results(scoring_date=latest_scoring_date)
@@ -367,6 +373,11 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                 "cpi_yoy_pct",
                 "usdtry_rate",
                 "regime",
+                "cash_state",
+                "cash_pct",
+                "cash_days_in_state",
+                "cash_last_transition_date",
+                "cash_target_state",
             ],
             [
                 {
@@ -380,6 +391,11 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                     "cpi_yoy_pct": macro.get("cpi_yoy_pct"),
                     "usdtry_rate": macro.get("usdtry_rate"),
                     "regime": macro.get("regime"),
+                    "cash_state": cash_state.get("state"),
+                    "cash_pct": cash_state.get("cash_pct"),
+                    "cash_days_in_state": cash_state.get("days_in_state"),
+                    "cash_last_transition_date": cash_state.get("last_transition_date"),
+                    "cash_target_state": cash_state.get("target_state"),
                 }
             ],
         )

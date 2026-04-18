@@ -203,6 +203,52 @@ jobs:
               core.info(`Closed issue #${issue.number}`);
             }
 
+      - name: Check cash-allocation state (Phase 4)
+        id: cash_status
+        continue-on-error: true
+        run: |
+          set +e
+          python -m bist_picker cash-status --json > cash_status.json
+          status=$?
+          echo "transitioned=$([ $status -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          cat cash_status.json
+          exit 0
+
+      - name: Notify on cash-state transition
+        if: steps.cash_status.outputs.transitioned == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const snap = JSON.parse(fs.readFileSync('cash_status.json', 'utf8'));
+            const title = `[portfolio] Cash state changed \u2192 ${snap.state}`;
+            const lines = [
+              `The Phase 4 cash-allocation signal transitioned on **${snap.date}**.`,
+              '',
+              `- **New state:** \`${snap.state}\` (cash_pct = ${Math.round((snap.cash_pct || 0) * 100)}%)`,
+              `- **Raw signal:** ${snap.raw_signal} (market=${snap.market_regime}, macro=${snap.macro_regime})`,
+              `- **Target (signal-only):** ${snap.target_state}`,
+              `- **Next transition allowed on or after:** ${snap.next_possible_transition_date || 'n/a'}`,
+              '',
+              '#### What this means',
+              'Position weights on the next rebalance will be scaled so that',
+              '`sum(weights) = 1 - cash_pct`. No trades are executed automatically;',
+              'this is an advisory signal mirrored into the mobile snapshot.',
+              '',
+              'Tune the hysteresis in `bist_picker/config/cash_signal.yaml` or flip',
+              '`enabled: false` to disable the signal without losing the logging.',
+              '',
+              `_Notes from the state machine:_ ${snap.notes || 'none'}`,
+              '',
+              '_This issue is opened automatically by the Publish Mobile Feed workflow._',
+            ];
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+            const created = await github.rest.issues.create({
+              owner, repo, title, body, labels: ['cash-signal'],
+            });
+            core.info(`Opened cash-state issue #${created.data.number}`);
+
       - name: Publish manifest and snapshot to public feed repo
         run: |
           set -euxo pipefail
