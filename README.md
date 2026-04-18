@@ -2,6 +2,11 @@
 
 Cloud pipeline and public mobile feed for the BIST Picker Android app.
 
+> **Current state:** See `PROJECT_STATE.md` in the Android repo root for the up-to-date
+> scoring model, portfolio sizing, and DCF parameters.
+> Last refactor: PR #3 (merged 2026-04-17) — dropped insider factor, made DCF discount
+> rate dynamic (TCMB policy rate + ERP), bumped portfolio 3 → 5, reworked BEAR regime.
+
 ## What This Repo Does
 
 - Runs the daily market pipeline on GitHub Actions
