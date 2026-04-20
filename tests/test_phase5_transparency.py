@@ -331,7 +331,12 @@ def test_mobile_snapshot_open_positions_phase5_columns(source_engine, tmp_path):
     assert expected_new_cols.issubset(col_names)
 
 
-def test_mobile_snapshot_schema_version_is_2(source_engine, tmp_path):
+def test_mobile_snapshot_schema_version_matches_constant(source_engine, tmp_path):
+    """Schema version in the exported file matches the module constant.
+
+    Kept at 1 until the APK is updated to accept version 2 — bump both
+    together when Phase 5 UI lands on the Android side.
+    """
     out = tmp_path / "snap3.db"
     export_mobile_snapshot(out)
 
@@ -341,4 +346,4 @@ def test_mobile_snapshot_schema_version_is_2(source_engine, tmp_path):
         ).fetchone()[0]
 
     assert version == SNAPSHOT_SCHEMA_VERSION
-    assert SNAPSHOT_SCHEMA_VERSION == 2
+    assert SNAPSHOT_SCHEMA_VERSION == 1

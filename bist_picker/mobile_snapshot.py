@@ -21,7 +21,7 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 
-SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SCHEMA_VERSION = 1  # APK v1 ile uyumlu — APK Phase 5 UI hazır olunca 2'ye çekilecek
 PRICE_HISTORY_DAYS = 730
 DEFAULT_MOBILE_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "data" / "mobile_snapshot.db"
 REQUIRED_TABLES = (
