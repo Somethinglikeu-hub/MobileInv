@@ -21,7 +21,7 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 PRICE_HISTORY_DAYS = 730
 DEFAULT_MOBILE_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "data" / "mobile_snapshot.db"
 REQUIRED_TABLES = (
@@ -117,9 +117,17 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             pnl_pct REAL,
             target_price REAL,
             stop_loss_price REAL,
+            stop_pct_from_entry REAL,
             composite_score REAL,
             selection_date TEXT,
-            days_held INTEGER
+            days_held INTEGER,
+            reason_top_factors_json TEXT,
+            quality_flags_json TEXT,
+            dcf_margin_of_safety_pct REAL,
+            dcf_intrinsic_value REAL,
+            dcf_growth_rate_pct REAL,
+            dcf_discount_rate_pct REAL,
+            dcf_terminal_growth_pct REAL
         );
 
         CREATE TABLE portfolio_history (
@@ -188,7 +196,11 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             dividend REAL,
             beta REAL,
             delta REAL,
-            quality_flags_json TEXT
+            quality_flags_json TEXT,
+            dcf_intrinsic_value REAL,
+            dcf_growth_rate_pct REAL,
+            dcf_discount_rate_pct REAL,
+            dcf_terminal_growth_pct REAL
         );
 
         CREATE TABLE adjusted_metrics_latest (
@@ -414,9 +426,17 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                 "pnl_pct",
                 "target_price",
                 "stop_loss_price",
+                "stop_pct_from_entry",
                 "composite_score",
                 "selection_date",
                 "days_held",
+                "reason_top_factors_json",
+                "quality_flags_json",
+                "dcf_margin_of_safety_pct",
+                "dcf_intrinsic_value",
+                "dcf_growth_rate_pct",
+                "dcf_discount_rate_pct",
+                "dcf_terminal_growth_pct",
             ],
             [
                 {"sort_order": index, **record}
@@ -528,6 +548,10 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                 "beta",
                 "delta",
                 "quality_flags_json",
+                "dcf_intrinsic_value",
+                "dcf_growth_rate_pct",
+                "dcf_discount_rate_pct",
+                "dcf_terminal_growth_pct",
             ],
             [
                 {
@@ -584,6 +608,26 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                     ),
                     "quality_flags_json": (
                         latest_scores.get(companies_by_ticker[str(record["ticker"])].id).quality_flags_json
+                        if latest_scores.get(companies_by_ticker[str(record["ticker"])].id)
+                        else None
+                    ),
+                    "dcf_intrinsic_value": (
+                        latest_scores.get(companies_by_ticker[str(record["ticker"])].id).dcf_intrinsic_value
+                        if latest_scores.get(companies_by_ticker[str(record["ticker"])].id)
+                        else None
+                    ),
+                    "dcf_growth_rate_pct": (
+                        latest_scores.get(companies_by_ticker[str(record["ticker"])].id).dcf_growth_rate_pct
+                        if latest_scores.get(companies_by_ticker[str(record["ticker"])].id)
+                        else None
+                    ),
+                    "dcf_discount_rate_pct": (
+                        latest_scores.get(companies_by_ticker[str(record["ticker"])].id).dcf_discount_rate_pct
+                        if latest_scores.get(companies_by_ticker[str(record["ticker"])].id)
+                        else None
+                    ),
+                    "dcf_terminal_growth_pct": (
+                        latest_scores.get(companies_by_ticker[str(record["ticker"])].id).dcf_terminal_growth_pct
                         if latest_scores.get(companies_by_ticker[str(record["ticker"])].id)
                         else None
                     ),

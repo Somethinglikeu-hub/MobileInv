@@ -27,6 +27,34 @@ class HomePerformance(BaseModel):
     benchmark_ytd: float | None = None
 
 
+class DcfBreakdown(BaseModel):
+    """Phase 5: DCF valuation inputs + result surfaced to APK."""
+
+    intrinsic_value: float | None = None
+    growth_rate_pct: float | None = None
+    discount_rate_pct: float | None = None
+    terminal_growth_pct: float | None = None
+    margin_of_safety_pct: float | None = None
+
+
+class ReasonFactor(BaseModel):
+    """One entry in the 'why selected' top-factors list."""
+
+    factor: str
+    label: str
+    value: float
+
+
+class PickDetail(BaseModel):
+    """Phase 5: per-pick transparency block attached to each OpenPosition."""
+
+    reason_top_factors: list[ReasonFactor] = []
+    red_flags: list[str] = []
+    dcf: DcfBreakdown | None = None
+    stop_loss_price: float | None = None
+    stop_pct_from_entry: float | None = None
+
+
 class OpenPosition(BaseModel):
     portfolio: str | None = None
     ticker: str
@@ -40,6 +68,7 @@ class OpenPosition(BaseModel):
     composite_score: float | None = None
     selection_date: str | None = None
     days_held: int | None = None
+    detail: PickDetail | None = None
 
 
 class PortfolioHistoryItem(BaseModel):

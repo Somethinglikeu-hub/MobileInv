@@ -43,6 +43,22 @@ _RUNTIME_SQLITE_COLUMN_ADDS: dict[tuple[str, str], str] = {
     ("portfolio_selections", "cash_pct"): (
         "ALTER TABLE portfolio_selections ADD COLUMN cash_pct REAL"
     ),
+    # Phase 5: transparency surface — DCF breakdown + per-pick reason chips.
+    ("scoring_results", "dcf_intrinsic_value"): (
+        "ALTER TABLE scoring_results ADD COLUMN dcf_intrinsic_value REAL"
+    ),
+    ("scoring_results", "dcf_growth_rate_pct"): (
+        "ALTER TABLE scoring_results ADD COLUMN dcf_growth_rate_pct REAL"
+    ),
+    ("scoring_results", "dcf_discount_rate_pct"): (
+        "ALTER TABLE scoring_results ADD COLUMN dcf_discount_rate_pct REAL"
+    ),
+    ("scoring_results", "dcf_terminal_growth_pct"): (
+        "ALTER TABLE scoring_results ADD COLUMN dcf_terminal_growth_pct REAL"
+    ),
+    ("portfolio_selections", "reason_top_factors_json"): (
+        "ALTER TABLE portfolio_selections ADD COLUMN reason_top_factors_json TEXT"
+    ),
 }
 
 _RUNTIME_SQLITE_INDEXES: dict[str, str] = {

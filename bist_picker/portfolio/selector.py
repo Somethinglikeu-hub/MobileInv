@@ -29,6 +29,7 @@ Results are written to the portfolio_selections table via
 select_and_store().
 """
 
+import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
@@ -45,6 +46,26 @@ from bist_picker.portfolio.cash_signal import (
     CashSignalResult,
 )
 from bist_picker.portfolio.universes import UniverseBuilder
+
+# Phase 5: human-friendly labels for the top-factor reason chips. Kept
+# alongside the selector (not in the factor modules) because this mapping is a
+# UI concern rather than a scoring concern. Only factors that end up on a 0-100
+# scale after normalization are eligible — raw DCF MoS and raw PEG score are
+# excluded because their scale is not comparable to the normalized factors.
+_REASON_FACTOR_LABELS: dict[str, str] = {
+    "buffett_score": "Buffett Quality",
+    "graham_score": "Graham Value",
+    "piotroski_fscore": "Piotroski",
+    "magic_formula_rank": "Magic Formula",
+    "momentum_score": "Momentum",
+    "technical_score": "Technical",
+    "dividend_score": "Dividend Yield",
+    "banking_composite": "Banking Model",
+    "holding_composite": "Holding Model",
+    "reit_composite": "REIT Model",
+}
+# Cap the number of chips so the APK detail card stays scannable.
+_REASON_TOP_N: int = 3
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +98,43 @@ _MAX_STOP_PCT: float = 0.25          # maximum stop distance (25%)
 _MIN_UPSIDE: float = 0.10           # 10% minimum implied upside
 _SCORE_UPSIDE_DIVISOR: float = 400  # 100-score stock -> 25% upside (100/400 = 0.25)
 _DEFAULT_MAX_TARGET_MULTIPLE: float = 2.5  # cap: target <= entry * 2.5 (150% upside)
+
+
+def _compute_reason_top_factors(
+    factor_scores: dict[str, Optional[float]],
+    top_n: int = _REASON_TOP_N,
+) -> list[dict]:
+    """Return the top-N contributing factor chips for a pick.
+
+    Ranks the factors present in ``factor_scores`` by their normalized 0-100
+    value and returns the top ``top_n`` as a list of
+    ``{factor, label, value}`` dicts. Factors with ``None`` values are skipped
+    so we don't surface phantom "0" chips when a scorer was unavailable.
+
+    Stable tie-break by the order factors appear in ``_REASON_FACTOR_LABELS``
+    — prevents day-to-day chip shuffling when two factors score identically.
+    """
+    scored: list[tuple[int, float, str]] = []
+    for idx, (col, _label) in enumerate(_REASON_FACTOR_LABELS.items()):
+        val = factor_scores.get(col)
+        if val is None:
+            continue
+        try:
+            scored.append((idx, float(val), col))
+        except (TypeError, ValueError):
+            continue
+
+    # Sort by score desc, with declaration order as tie-breaker (ascending).
+    scored.sort(key=lambda item: (-item[1], item[0]))
+
+    chips: list[dict] = []
+    for _idx, score, col in scored[:top_n]:
+        chips.append({
+            "factor": col,
+            "label": _REASON_FACTOR_LABELS[col],
+            "value": round(score, 2),
+        })
+    return chips
 
 
 def get_selection_target_count(config_path: Optional[Path] = None) -> int:
@@ -406,6 +464,13 @@ class PortfolioSelector:
                     )
                     .first()
                 )
+                # Phase 5: serialise reason chips once per pick.
+                reason_chips = pick.get("reason_top_factors") or []
+                reason_json = (
+                    json.dumps(reason_chips, separators=(",", ":"))
+                    if reason_chips
+                    else None
+                )
                 if existing:
                     existing.composite_score = pick["score"]
                     existing.target_price = pick["target_price"]
@@ -414,6 +479,7 @@ class PortfolioSelector:
                     existing.weight = pick.get("weight")
                     existing.cash_state = pick.get("cash_state")
                     existing.cash_pct = pick.get("cash_pct")
+                    existing.reason_top_factors_json = reason_json
                 else:
                     session.add(
                         PortfolioSelection(
@@ -427,6 +493,7 @@ class PortfolioSelector:
                             weight=pick.get("weight"),
                             cash_state=pick.get("cash_state"),
                             cash_pct=pick.get("cash_pct"),
+                            reason_top_factors_json=reason_json,
                         )
                     )
 
@@ -486,6 +553,12 @@ class PortfolioSelector:
         candidates = []
         for score_row, company in rows:
             composite = getattr(score_row, score_col, None)
+            # Phase 5: snapshot the full normalized factor score row so the
+            # selector can derive "why selected" chips without another query.
+            factor_scores = {
+                col: getattr(score_row, col, None)
+                for col in _REASON_FACTOR_LABELS
+            }
             candidates.append(
                 {
                     "company_id": company.id,
@@ -497,6 +570,7 @@ class PortfolioSelector:
                     "dcf_mos": score_row.dcf_margin_of_safety_pct,
                     "data_completeness": getattr(score_row, "data_completeness", None),
                     "technical_score": getattr(score_row, "technical_score", None),
+                    "factor_scores": factor_scores,
                 }
             )
         return candidates
@@ -745,6 +819,10 @@ class PortfolioSelector:
         target = self._compute_target_price(candidate, entry)
         stop = self._compute_atr_stop(candidate["company_id"], entry, session)
 
+        reason_top_factors = _compute_reason_top_factors(
+            candidate.get("factor_scores") or {}
+        )
+
         return {
             "company_id": candidate["company_id"],
             "ticker": candidate["ticker"],
@@ -754,6 +832,7 @@ class PortfolioSelector:
             "target_price": target,
             "stop_loss": stop,
             "dcf_mos": candidate.get("dcf_mos"),
+            "reason_top_factors": reason_top_factors,
         }
 
     def _get_latest_price(
