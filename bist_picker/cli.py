@@ -257,6 +257,25 @@ def score(ctx: click.Context, use_regime: bool) -> None:
             d = dcf.score(cid, session, scoring_date=scoring_date) # DCF not yet context-aware
             # dcf_margin_of_safety_pct is stored raw (not normalized)
             row["dcf_margin_of_safety_pct"] = (d or {}).get("dcf_combined")
+            # Phase 5: persist the DCF breakdown for transparency UI.
+            # Growth / discount / terminal are fractions in DCFScorer output
+            # (e.g. 0.12 = 12%) — we store them as percent so downstream
+            # consumers can render without having to remember the unit.
+            if d is not None:
+                intrinsic = d.get("intrinsic_value_per_share")
+                growth = d.get("growth_rate_used")
+                disc = d.get("discount_rate_used")
+                term = d.get("terminal_growth_used")
+                row["dcf_intrinsic_value"] = intrinsic
+                row["dcf_growth_rate_pct"] = (
+                    round(growth * 100.0, 2) if growth is not None else None
+                )
+                row["dcf_discount_rate_pct"] = (
+                    round(disc * 100.0, 2) if disc is not None else None
+                )
+                row["dcf_terminal_growth_pct"] = (
+                    round(term * 100.0, 2) if term is not None else None
+                )
 
             g = graham.score(cid, session, scoring_date=scoring_date, scoring_context=context)
             row["graham_score"] = (g or {}).get("graham_combined")
@@ -332,7 +351,11 @@ def score(ctx: click.Context, use_regime: bool) -> None:
         # normalizes it on the fly when building composites.
         _EXTRA_COLS = ["model_used", "dcf_margin_of_safety_pct",
                        "dividend_score", "banking_composite", "holding_composite",
-                       "reit_composite", "piotroski_fscore_raw", "data_completeness"]
+                       "reit_composite", "piotroski_fscore_raw", "data_completeness",
+                       # Phase 5: DCF breakdown + red-flag payload.
+                       "dcf_intrinsic_value", "dcf_growth_rate_pct",
+                       "dcf_discount_rate_pct", "dcf_terminal_growth_pct",
+                       "quality_flags_json"]
         console.print("[dim]  Writing raw scores to DB...[/dim]")
         for cid, row in raw_scores.items():
             existing = (
@@ -358,11 +381,16 @@ def score(ctx: click.Context, use_regime: bool) -> None:
                     momentum_score=row.get("momentum_score"),
                     technical_score=row.get("technical_score"),
                     dcf_margin_of_safety_pct=row.get("dcf_margin_of_safety_pct"),
+                    dcf_intrinsic_value=row.get("dcf_intrinsic_value"),
+                    dcf_growth_rate_pct=row.get("dcf_growth_rate_pct"),
+                    dcf_discount_rate_pct=row.get("dcf_discount_rate_pct"),
+                    dcf_terminal_growth_pct=row.get("dcf_terminal_growth_pct"),
                     dividend_score=row.get("dividend_score"),
                     banking_composite=row.get("banking_composite"),
                     holding_composite=row.get("holding_composite"),
                     reit_composite=row.get("reit_composite"),
                     data_completeness=row.get("data_completeness"),
+                    quality_flags_json=row.get("quality_flags_json"),
                 ))
         session.commit()
 
@@ -405,6 +433,30 @@ def score(ctx: click.Context, use_regime: bool) -> None:
             risk_clf.classify_all(session, scoring_date=scoring_date)
         except Exception as exc:
             console.print(f"[yellow]Warning: risk classification failed: {exc}[/yellow]")
+
+        # Step 3e+: Phase 5 red flags. Runs AFTER normalization so
+        # technical_score thresholds compare against the 0-100 scale.
+        # We read everything back from DB (not the in-memory row dict) so
+        # the flag set reflects the persisted, normalized values exactly.
+        console.print("[dim]  Detecting red flags...[/dim]")
+        try:
+            from bist_picker.scoring.red_flags import detect_flags, serialize_flags
+            flag_rows = (
+                session.query(ScoringResult)
+                .filter(ScoringResult.scoring_date == scoring_date)
+                .all()
+            )
+            for sr in flag_rows:
+                flags = detect_flags({
+                    "piotroski_fscore_raw": sr.piotroski_fscore_raw,
+                    "data_completeness": sr.data_completeness,
+                    "dcf_margin_of_safety_pct": sr.dcf_margin_of_safety_pct,
+                    "technical_score": sr.technical_score,
+                })
+                sr.quality_flags_json = serialize_flags(flags)
+            session.commit()
+        except Exception as exc:
+            console.print(f"[yellow]Warning: red flag detection failed: {exc}[/yellow]")
 
         # Step 3f: Compute composite scores
         console.print("[dim]  Computing composite scores...[/dim]")

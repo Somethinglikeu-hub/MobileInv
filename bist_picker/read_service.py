@@ -134,7 +134,15 @@ def _load_latest_macro(session: Session) -> Optional[dict]:
 
 
 def get_open_positions() -> pd.DataFrame:
-    """Fetch the latest open ALPHA portfolio snapshot."""
+    """Fetch the latest open ALPHA portfolio snapshot.
+
+    Phase 5: joins the matching ``ScoringResult`` for each pick's
+    ``selection_date`` so the returned frame carries the DCF breakdown and
+    red-flag payload needed by the APK pick-detail view. Also computes
+    ``stop_pct_from_entry`` — a derived field that answers "how much downside
+    does my stop protect against from my entry?" without the APK having to
+    do the math.
+    """
     session = _get_session()
     try:
         latest_open_date = (
@@ -164,12 +172,25 @@ def get_open_positions() -> pd.DataFrame:
         if not rows:
             return pd.DataFrame()
 
+        # Phase 5: bulk-load the matching scoring rows (same company_ids at the
+        # same selection_date) so every pick can surface its DCF breakdown +
+        # red flags without an N+1 query.
+        company_ids = [company.id for _, company in rows]
+        scoring_rows = (
+            session.query(ScoringResult)
+            .filter(
+                ScoringResult.company_id.in_(company_ids),
+                ScoringResult.scoring_date == latest_open_date[0],
+            )
+            .all()
+        )
+        scoring_by_company: dict[int, ScoringResult] = {
+            sr.company_id: sr for sr in scoring_rows
+        }
+
         records = []
         today = date.today()
-        price_by_company = _latest_prices(
-            session,
-            [company.id for _, company in rows],
-        )
+        price_by_company = _latest_prices(session, company_ids)
         for pos, company in rows:
             current_price = price_by_company.get(company.id)
             entry = pos.entry_price
@@ -181,6 +202,13 @@ def get_open_positions() -> pd.DataFrame:
             if pos.selection_date:
                 days_held = (today - pos.selection_date).days
 
+            # Phase 5 derived: stop distance expressed as percent of entry.
+            # Positive values = stop below entry (the normal case).
+            stop_pct_from_entry = None
+            if entry and entry > 0 and pos.stop_loss_price is not None:
+                stop_pct_from_entry = (entry - pos.stop_loss_price) / entry * 100.0
+
+            sr = scoring_by_company.get(company.id)
             records.append({
                 "portfolio": pos.portfolio,
                 "ticker": company.ticker,
@@ -191,9 +219,30 @@ def get_open_positions() -> pd.DataFrame:
                 "pnl_pct": pnl_pct,
                 "target_price": pos.target_price,
                 "stop_loss_price": pos.stop_loss_price,
+                "stop_pct_from_entry": stop_pct_from_entry,
                 "composite_score": pos.composite_score,
                 "selection_date": pos.selection_date,
                 "days_held": days_held,
+                # Phase 5 transparency payload. Stored as JSON text so the
+                # wire format doesn't change as we evolve the shape; callers
+                # that want structure call ``json.loads`` on demand.
+                "reason_top_factors_json": pos.reason_top_factors_json,
+                "quality_flags_json": sr.quality_flags_json if sr else None,
+                "dcf_margin_of_safety_pct": (
+                    sr.dcf_margin_of_safety_pct if sr else None
+                ),
+                "dcf_intrinsic_value": (
+                    sr.dcf_intrinsic_value if sr else None
+                ),
+                "dcf_growth_rate_pct": (
+                    sr.dcf_growth_rate_pct if sr else None
+                ),
+                "dcf_discount_rate_pct": (
+                    sr.dcf_discount_rate_pct if sr else None
+                ),
+                "dcf_terminal_growth_pct": (
+                    sr.dcf_terminal_growth_pct if sr else None
+                ),
             })
 
         df = pd.DataFrame(records)

@@ -6,7 +6,16 @@ portfolio_selections, macro_regime. All tables include created_at and
 updated_at auto-timestamps. Backend: SQLite.
 """
 
-from datetime import UTC, date, datetime
+from __future__ import annotations
+
+import sys
+from datetime import date, datetime
+
+if sys.version_info >= (3, 11):
+    from datetime import UTC as _UTC
+else:
+    from datetime import timezone as _timezone
+    _UTC = _timezone.utc
 from typing import Optional
 
 from sqlalchemy import (
@@ -32,7 +41,7 @@ class Base(DeclarativeBase):
 
 def _utcnow() -> datetime:
     """Return a naive UTC timestamp for SQLite-compatible DateTime columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(_UTC).replace(tzinfo=None)
 
 
 def _set_updated_at(mapper, connection, target):
@@ -213,6 +222,14 @@ class ScoringResult(Base):
     magic_formula_rank: Optional[float] = Column(Float)
     lynch_peg_score: Optional[float] = Column(Float)
     dcf_margin_of_safety_pct: Optional[float] = Column(Float)
+    # Phase 5: DCF breakdown persisted for UI transparency. Computed by
+    # DCFScorer.score() but previously dropped; now we keep intrinsic value,
+    # growth, discount, and terminal growth so the APK can render the story
+    # ("intrinsic 45 TRY vs price 29 TRY, 8% growth, 42% discount, 10% terminal").
+    dcf_intrinsic_value: Optional[float] = Column(Float)
+    dcf_growth_rate_pct: Optional[float] = Column(Float)
+    dcf_discount_rate_pct: Optional[float] = Column(Float)
+    dcf_terminal_growth_pct: Optional[float] = Column(Float)
     momentum_score: Optional[float] = Column(Float)
     insider_score: Optional[float] = Column(Float)
     technical_score: Optional[float] = Column(Float)
@@ -259,6 +276,10 @@ class PortfolioSelection(Base):
     # don't have to cross-join cash_allocation_state by date).
     cash_state: Optional[str] = Column(String(20))
     cash_pct: Optional[float] = Column(Float)
+    # Phase 5: structured "why selected" payload. JSON list of at most 3
+    # objects: {"factor": "buffett_score", "label": "Buffett Quality",
+    # "value": 72.4}. The APK renders these as chips on the pick detail view.
+    reason_top_factors_json: Optional[str] = Column(Text)
     created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)
     updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

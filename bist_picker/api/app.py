@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
@@ -15,14 +16,17 @@ from bist_picker.api.schemas import (
     AdjustedMetricsResponse,
     CashStateSnapshot,
     CompanyInfoResponse,
+    DcfBreakdown,
     HealthResponse,
     HomePerformance,
     HomeResponse,
     LatestScoresResponse,
     MacroSnapshot,
     OpenPosition,
+    PickDetail,
     PortfolioHistoryItem,
     PricePoint,
+    ReasonFactor,
     ScoringItem,
     ScoringListResponse,
     ScoringOptionsResponse,
@@ -34,6 +38,7 @@ from bist_picker.api.schemas import (
 )
 from bist_picker.db.connection import ensure_runtime_db_ready, get_session
 from bist_picker.db.schema import Company
+from bist_picker.scoring.red_flags import deserialize_flags
 
 DEFAULT_PAGE_SIZE = 40
 MAX_PAGE_SIZE = 100
@@ -74,11 +79,17 @@ def _normalize_value(value: Any) -> Any:
 
 
 def _frame_records(frame: pd.DataFrame, fields: list[str]) -> list[dict[str, Any]]:
-    """Return a normalized record list from a dataframe."""
+    """Return a normalized record list from a dataframe.
+
+    Only requests columns that actually exist in the frame so this stays
+    backwards-compatible when a new Phase adds columns that an older DB has
+    not yet populated.
+    """
     if frame.empty:
         return []
+    available = [f for f in fields if f in frame.columns]
     records: list[dict[str, Any]] = []
-    for row in frame[fields].to_dict(orient="records"):
+    for row in frame[available].to_dict(orient="records"):
         records.append({field: _normalize_value(value) for field, value in row.items()})
     return records
 
@@ -148,6 +159,64 @@ def _company_info_or_404(ticker: str) -> dict[str, Any]:
     return info
 
 
+def _build_pick_detail(record: dict[str, Any]) -> PickDetail | None:
+    """Phase 5: assemble per-pick transparency block from a read_service record.
+
+    Returns None when the record carries no transparency data at all — keeps
+    the JSON payload small for positions scored before Phase 5 landed.
+    """
+    reason_top_factors: list[ReasonFactor] = []
+    raw_reasons = record.get("reason_top_factors_json")
+    if raw_reasons:
+        try:
+            parsed = json.loads(raw_reasons) if isinstance(raw_reasons, str) else raw_reasons
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        reason_top_factors.append(
+                            ReasonFactor(
+                                factor=str(item.get("factor", "")),
+                                label=str(item.get("label", "")),
+                                value=float(item.get("value", 0.0)),
+                            )
+                        )
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    red_flags = deserialize_flags(record.get("quality_flags_json"))
+
+    dcf_mos = _normalize_value(record.get("dcf_margin_of_safety_pct"))
+    dcf_iv = _normalize_value(record.get("dcf_intrinsic_value"))
+    dcf_g = _normalize_value(record.get("dcf_growth_rate_pct"))
+    dcf_d = _normalize_value(record.get("dcf_discount_rate_pct"))
+    dcf_t = _normalize_value(record.get("dcf_terminal_growth_pct"))
+    dcf = (
+        DcfBreakdown(
+            intrinsic_value=dcf_iv,
+            growth_rate_pct=dcf_g,
+            discount_rate_pct=dcf_d,
+            terminal_growth_pct=dcf_t,
+            margin_of_safety_pct=dcf_mos,
+        )
+        if any(v is not None for v in (dcf_iv, dcf_g, dcf_d, dcf_t, dcf_mos))
+        else None
+    )
+
+    stop_loss = _normalize_value(record.get("stop_loss_price"))
+    stop_pct = _normalize_value(record.get("stop_pct_from_entry"))
+
+    if not reason_top_factors and not red_flags and dcf is None and stop_pct is None:
+        return None
+
+    return PickDetail(
+        reason_top_factors=reason_top_factors,
+        red_flags=red_flags,
+        dcf=dcf,
+        stop_loss_price=stop_loss,
+        stop_pct_from_entry=stop_pct,
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -169,7 +238,27 @@ def get_home() -> HomeResponse:
             benchmark_ytd=_normalize_value(performance.get("benchmark_ytd")),
         ),
         open_positions=[
-            OpenPosition(**record)
+            OpenPosition(
+                **{
+                    k: record[k]
+                    for k in (
+                        "portfolio",
+                        "ticker",
+                        "name",
+                        "company_id",
+                        "entry_price",
+                        "current_price",
+                        "pnl_pct",
+                        "target_price",
+                        "stop_loss_price",
+                        "composite_score",
+                        "selection_date",
+                        "days_held",
+                    )
+                    if k in record
+                },
+                detail=_build_pick_detail(record),
+            )
             for record in _frame_records(
                 open_positions,
                 [
@@ -182,9 +271,17 @@ def get_home() -> HomeResponse:
                     "pnl_pct",
                     "target_price",
                     "stop_loss_price",
+                    "stop_pct_from_entry",
                     "composite_score",
                     "selection_date",
                     "days_held",
+                    "reason_top_factors_json",
+                    "quality_flags_json",
+                    "dcf_margin_of_safety_pct",
+                    "dcf_intrinsic_value",
+                    "dcf_growth_rate_pct",
+                    "dcf_discount_rate_pct",
+                    "dcf_terminal_growth_pct",
                 ],
             )
         ],
