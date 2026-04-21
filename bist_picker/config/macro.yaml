@@ -16,8 +16,8 @@ erp:
   # Damodaran-style Turkey Equity Risk Premium = US ERP + Country Risk Premium.
   # Source: NYU Stern Damodaran ctryprem.xls (updated monthly by the author).
   # Manual update because no free API returns Turkey sovereign CDS / EMBI spread.
-  equity_risk_premium_try: 0.0952
-  last_updated: "2025-07-01"       # YYYY-MM-DD — bump whenever you refresh the value
+  equity_risk_premium_try: 0.0889
+  last_updated: "2026-04-21"       # YYYY-MM-DD — bump whenever you refresh the value
   source_url: "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html"
   stale_after_days: 90             # pipeline opens a GitHub issue past this age
 
