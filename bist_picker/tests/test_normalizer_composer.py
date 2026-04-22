@@ -364,9 +364,9 @@ class TestCompose:
         result = composer.compose(1, factor_scores, "alpha", "OPERATING")
 
         # Only quality_buffett available; the weighted score is still 80.0,
-        # but current composer logic applies a coverage penalty:
-        # coverage = 0.60 -> penalty = 0.96 -> 80 * 0.96 = 76.8
-        assert result == pytest.approx(76.8, abs=1e-9)
+        # but current composer logic applies a hardened coverage penalty:
+        # coverage = 0.60 -> penalty = 0.50 + 0.50*0.60 = 0.80 -> 80 * 0.80 = 64.0
+        assert result == pytest.approx(64.0, abs=1e-9)
 
     def test_two_of_three_none_redistributes(self, tmp_path):
         """Weight redistribution works with three factors, two None."""
@@ -384,8 +384,8 @@ class TestCompose:
         result = composer.compose(1, factor_scores, "alpha", "OPERATING")
 
         # Only b available; coverage = 0.30 so the composer applies a
-        # 0.93 penalty -> 60 * 0.93 = 55.8
-        assert result == pytest.approx(55.8, abs=1e-9)
+        # hardened penalty: 0.50 + 0.50*0.30 = 0.65 -> 60 * 0.65 = 39.0
+        assert result == pytest.approx(39.0, abs=1e-9)
 
     def test_all_none_returns_none(self, tmp_path):
         """All None factors -> compose() returns None."""

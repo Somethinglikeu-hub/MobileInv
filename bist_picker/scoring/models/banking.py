@@ -19,7 +19,7 @@ nim             0.15     higher      Net Interest Margin = NII / avg assets
 npl_ratio       0.15     lower=good  Non-performing loans / total loans
 car             0.15     higher      Capital Adequacy Ratio (regulatory)
 cost_income     0.15     lower=good  Operating costs / operating income
-loan_growth     0.10     higher      Nominal YoY growth in total loans
+loan_growth     0.10     higher      REAL (CPI-deflated) YoY growth in total loans
 roe             0.10     higher      Reported net income / avg book equity
 
 Data extraction strategy:
@@ -49,7 +49,13 @@ import yaml
 from sqlalchemy.orm import Session
 
 from bist_picker.cleaning.inflation import _find_item_by_codes, _find_item_by_labels
-from bist_picker.db.schema import AdjustedMetric, Company, DailyPrice, FinancialStatement
+from bist_picker.db.schema import (
+    AdjustedMetric,
+    Company,
+    DailyPrice,
+    FinancialStatement,
+    MacroRegime,
+)
 
 logger = logging.getLogger("bist_picker.scoring.models.banking")
 
@@ -193,12 +199,15 @@ class BankingScorer:
             logger.debug("No financial statement data for bank %s", company.ticker)
             return None
 
-        # Current-period data
-        cur_income = income_rows[0] if income_rows else []
-        cur_balance = balance_rows[0] if balance_rows else []
+        # Current-period data  (each row is (period_end, data_json_list))
+        cur_income_pe, cur_income = income_rows[0] if income_rows else (None, [])
+        cur_balance_pe, cur_balance = balance_rows[0] if balance_rows else (None, [])
 
         # Prior-period data (for YoY calculations)
-        prev_balance = balance_rows[1] if len(balance_rows) > 1 else None
+        prev_balance_pe: Optional[date] = None
+        prev_balance: Optional[list[dict]] = None
+        if len(balance_rows) > 1:
+            prev_balance_pe, prev_balance = balance_rows[1]
 
         # Raw computations
         net_income = self._get_net_income(cur_income)
@@ -226,7 +235,15 @@ class BankingScorer:
         nim = _safe_ratio(nii, avg_assets)
         cost_income = _safe_ratio(opex, op_income)
         npl_ratio = _safe_ratio(npl, loans_cur)
-        loan_growth = _safe_growth(loans_cur, loans_prev)
+
+        # Real (inflation-adjusted) loan growth: nominal TRY loan growth in
+        # Turkey is dominated by CPI (>40% YoY in 2022-2025), so a nominal
+        # ceiling of 30% saturates the entire universe. We deflate nominal
+        # growth by the 12-month CPI YoY rate measured at the current
+        # statement's period_end to surface genuine real-balance-sheet
+        # expansion vs. pure inflation pass-through.
+        cpi_yoy_current = self._lookup_cpi_yoy(session, cur_balance_pe)
+        loan_growth = _safe_real_growth(loans_cur, loans_prev, cpi_yoy_current)
         loan_to_deposit = _safe_ratio(loans_cur, deposits_cur)
 
         # P/B ratio: market price × shares / book equity
@@ -392,11 +409,12 @@ class BankingScorer:
         session: Session,
         limit: int = 2,
         scoring_date: Optional[date] = None,
-    ) -> list[list[dict]]:
+    ) -> list[tuple[date, list[dict]]]:
         """Load the most recent `limit` annual statements of a given type.
 
-        Returns a list of data_json arrays (already decoded), most recent first.
-        Each inner list is a list of financial statement line items.
+        Returns a list of (period_end, data_json_list) tuples, most recent
+        first. period_end is used downstream to look up the contemporaneous
+        CPI YoY for real-growth deflation.
         """
         from sqlalchemy import or_
 
@@ -422,17 +440,39 @@ class BankingScorer:
             .all()
         )
 
-        result = []
+        result: list[tuple[date, list[dict]]] = []
         for row in rows:
             try:
                 data = json.loads(row.data_json)
                 if isinstance(data, list):
-                    result.append(data)
+                    result.append((row.period_end, data))
             except (json.JSONDecodeError, TypeError) as exc:
                 logger.warning(
                     "Failed to decode data_json for company_id=%d: %s", company_id, exc
                 )
         return result
+
+    @staticmethod
+    def _lookup_cpi_yoy(session: Session, at_date: Optional[date]) -> Optional[float]:
+        """Fetch the CPI YoY % rate from MacroRegime at or just before `at_date`.
+
+        Returns a decimal (e.g. 0.50 for 50% YoY). None if unavailable.
+        MacroRegime.cpi_yoy_pct is already stored as a decimal fraction.
+        """
+        if at_date is None:
+            return None
+        row = (
+            session.query(MacroRegime.cpi_yoy_pct)
+            .filter(
+                MacroRegime.date <= at_date,
+                MacroRegime.cpi_yoy_pct.isnot(None),
+            )
+            .order_by(MacroRegime.date.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return float(row[0])
 
     # ── Raw metric extractors ─────────────────────────────────────────────────
 
@@ -613,6 +653,29 @@ def _safe_growth(current: Optional[float], prior: Optional[float]) -> Optional[f
     if current is None or prior is None or prior == 0:
         return None
     return (current - prior) / abs(prior)
+
+
+def _safe_real_growth(
+    current: Optional[float],
+    prior: Optional[float],
+    cpi_yoy: Optional[float],
+) -> Optional[float]:
+    """Real (inflation-deflated) growth: (1 + nominal) / (1 + cpi_yoy) − 1.
+
+    Falls back to nominal growth when cpi_yoy is missing, so the bank is
+    still scored (better than a silent None that drops the factor) but
+    will saturate the ceiling under high inflation. That's a *correctness
+    vs coverage* trade-off we resolve in favour of coverage; operational
+    telemetry will show the fallback rate.
+
+    Returns None when nominal growth itself is undefined (missing loans).
+    """
+    nominal = _safe_growth(current, prior)
+    if nominal is None:
+        return None
+    if cpi_yoy is None or cpi_yoy <= -1.0:
+        return nominal
+    return (1.0 + nominal) / (1.0 + cpi_yoy) - 1.0
 
 
 def _avg(a: Optional[float], b: Optional[float]) -> Optional[float]:

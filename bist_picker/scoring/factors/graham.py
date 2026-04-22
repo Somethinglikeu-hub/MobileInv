@@ -30,6 +30,7 @@ from bist_picker.db.schema import (
     Company,
     DailyPrice,
     FinancialStatement,
+    MacroRegime,
 )
 
 logger = logging.getLogger("bist_picker.scoring.factors.graham")
@@ -165,8 +166,14 @@ class GrahamScorer:
         result["pe_pb_product"] = self._score_pe_pb(
             latest_metric, balance, shares, current_price,
         )
+        # Dynamic TRY "bond yield" proxy: TCMB policy rate at scoring_date,
+        # falling back to the static thresholds value. TRY has no liquid
+        # 10y benchmark that trades near the policy rate during high-inflation
+        # regimes, so the short rate is the most honest available proxy for
+        # the opportunity cost of capital in the Graham formula.
+        dynamic_yield = self._lookup_policy_rate(session, scoring_date)
         result["graham_growth_value"] = self._score_graham_growth(
-            metrics, current_price,
+            metrics, current_price, dynamic_yield=dynamic_yield,
         )
 
         # Calculate combined score
@@ -272,10 +279,34 @@ class GrahamScorer:
         # Inverse: low product = high score
         return _linear_scale_inverse(product, low=max_product * 0.44, high=max_product * 2.0)
 
+    @staticmethod
+    def _lookup_policy_rate(
+        session: Session, scoring_date: Optional[date]
+    ) -> Optional[float]:
+        """Latest TCMB policy rate at or before ``scoring_date`` (as decimal).
+
+        Returns None if no rate is recorded before the cutoff; callers must
+        fall back to the static threshold in that case.
+        """
+        cutoff = scoring_date or date.today()
+        row = (
+            session.query(MacroRegime.policy_rate_pct)
+            .filter(
+                MacroRegime.date <= cutoff,
+                MacroRegime.policy_rate_pct.isnot(None),
+            )
+            .order_by(MacroRegime.date.desc())
+            .first()
+        )
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
+
     def _score_graham_growth(
         self,
         metrics: list[AdjustedMetric],
         price: float,
+        dynamic_yield: Optional[float] = None,
     ) -> Optional[float]:
         """Score based on Graham Growth Formula intrinsic value vs price.
 
@@ -328,7 +359,11 @@ class GrahamScorer:
         else:
             g = default_g_pct
 
-        bond_yield = self._thresholds.get("try_bond_yield", 0.30)
+        # Prefer the dynamic TCMB policy rate; fall back to the static
+        # thresholds.yaml value when MacroRegime has no data before cutoff.
+        bond_yield = dynamic_yield if dynamic_yield and dynamic_yield > 0 else None
+        if bond_yield is None:
+            bond_yield = self._thresholds.get("try_bond_yield", 0.30)
         if bond_yield <= 0:
             bond_yield = 0.30
 

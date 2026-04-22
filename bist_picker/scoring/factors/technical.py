@@ -278,9 +278,12 @@ class TechnicalScorer:
         vol_ratio = self._calc_volume_ratio(volumes)
         volume_trend = self._ratio_to_volume_signal(vol_ratio)
 
-        # Combine classic signals
+        # Combine classic signals. The MA contribution is the smooth
+        # distance-based signal, not the binary above/below.
+        last_close_val = closes[-1] if closes else None
+        ma_signal = self._ma_distance_to_signal(last_close_val, sma_200)
         technical_score_classic, classic_used = self._combine(
-            above_200ma_val=(1.0 if above_200ma else 0.0) if above_200ma is not None else None,
+            above_200ma_val=ma_signal,
             rsi_signal_val=rsi_signal,
             volume_trend_val=volume_trend,
         )
@@ -407,11 +410,38 @@ class TechnicalScorer:
 
         Returns:
             Tuple of (True/False/None, sma_value/None).
+            Binary boolean kept for the snapshot schema; the actual scoring
+            uses ``_ma_distance_to_signal`` on the pct distance for a smooth
+            signal instead of a cliff at the MA crossover.
         """
         if len(closes) < self._min_rows_ma:
             return None, None
         sma = sum(closes[-self._min_rows_ma:]) / self._min_rows_ma
         return closes[-1] > sma, sma
+
+    @staticmethod
+    def _ma_distance_to_signal(
+        last_close: Optional[float], sma: Optional[float]
+    ) -> Optional[float]:
+        """Map signed % distance from 200MA to a 0–1 signal.
+
+        Replaces the old binary ``above_200ma ? 1.0 : 0.0`` mapping. That
+        cliff meant a stock one kuruş above its SMA scored the same as one
+        20% above, and vice versa below. Here we linearly interpolate over
+        a +/-20% band centered on the SMA, clamped to [0, 1]:
+
+            distance = (close − sma) / sma
+            signal   = clamp(0.5 + distance × 2.5, 0, 1)
+
+        So distance +20% → 1.0, distance 0 → 0.5, distance −20% → 0.0. That
+        rewards strong uptrends and penalises deep breakdowns proportionally
+        while keeping values near the MA ambiguous (close to 0.5).
+        """
+        if last_close is None or sma is None or sma <= 0:
+            return None
+        distance = (last_close - sma) / sma
+        signal = 0.5 + distance * 2.5
+        return max(0.0, min(1.0, signal))
 
     def _calc_rsi(self, closes: list[float]) -> Optional[float]:
         """Calculate RSI using Wilder's smoothing (exponential moving average).
@@ -871,17 +901,29 @@ class TechnicalScorer:
     # ------------------------------------------------------------------
 
     def _rsi_to_signal(self, rsi: Optional[float]) -> Optional[float]:
-        """Map RSI value to a 0/0.5/1.0 signal.
+        """Map RSI value to a contrarian entry-quality signal in [0, 1].
+
+        The old mapping penalised oversold RSI with 0.5, which is
+        *opposite* of what value investing wants: an oversold quality
+        name is a classic contrarian setup, not a weaker one. New tiers:
+
+            rsi > 70          → 0.0    overbought, poor entry point
+            30 <= rsi <= 70   → 1.0    neutral / healthy tape
+            rsi < 30          → 0.85   oversold — contrarian BUY signal
+                                       (not 1.0, because an oversold name
+                                        that keeps falling is a knife, but
+                                        clearly better than neutral-but-
+                                        expensive for long-term value picks)
 
         Returns None if rsi is None.
         """
         if rsi is None:
             return None
         if rsi > self._rsi_overbought:
-            return 0.0   # overbought — bad entry point
+            return 0.0
         if rsi < self._rsi_oversold:
-            return 0.5   # oversold — risky but not a full rejection
-        return 1.0        # neutral zone — acceptable
+            return 0.85
+        return 1.0
 
     def _ratio_to_volume_signal(self, ratio: Optional[float]) -> Optional[float]:
         """Map 20d/60d volume ratio to a 0/0.5/1.0 signal.
