@@ -60,10 +60,28 @@ class MarketRegimeClassifier:
         latest_vol = df['vol'].iloc[-1]
         median_vol = df['vol'].tail(252).median()
         
-        # Responsiveness: Even if below SMA200, if Price > SMA50 and 1-month momentum is positive, it's a potential recovery.
+        # Recovery confirmation: we previously flagged "recovery" as soon as
+        # Price > SMA50 and 1-month return > +5%. That's a textbook bear-market
+        # rally signature — we were flipping to BULL and reopening risk into
+        # the teeth of a downtrend. Tighten the recovery branch to require:
+        #   (a) sustained 3-month return > +8% (not just a 1-month pop),
+        #   (b) SMA50 itself above SMA200 OR trending up (golden-cross
+        #       style confirmation), AND
+        #   (c) price above SMA50 (trend alignment).
+        # Staying below SMA200 but above SMA50 with a one-month rip is no
+        # longer enough — we wait for the 3m base to form before re-risking.
         one_month_ret = (df['price'].iloc[-1] / df['price'].iloc[-21]) - 1
-        
-        is_bullish = latest_price > sma200 or (latest_price > sma50 and one_month_ret > 0.05)
+        three_month_ret = (df['price'].iloc[-1] / df['price'].iloc[-63]) - 1
+        sma200_20d_ago = df['price'].rolling(200).mean().iloc[-21]
+        sma50_rising = sma50 > sma200 or sma200 > sma200_20d_ago
+
+        primary_bull = latest_price > sma200
+        recovery_confirmed = (
+            latest_price > sma50
+            and three_month_ret > 0.08
+            and sma50_rising
+        )
+        is_bullish = primary_bull or recovery_confirmed
         
         if is_bullish:
             if latest_vol < median_vol:

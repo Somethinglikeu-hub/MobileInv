@@ -350,11 +350,19 @@ class ScoreComposer:
             for score, weight in available.values()
         )
 
-        # Data-coverage penalty: softened to allow high-signal stocks with partial data.
-        # Full data -> no penalty (x1.0), 50% data -> x0.95, 20% data -> x0.92
+        # Data-coverage penalty. Previously softened to 0.90 + 0.10 × coverage
+        # which capped the penalty at 10% even for stocks with just one factor
+        # available — a single-factor "score" looked almost identical to a
+        # fully-populated score, making shoddy-data names drift into the top
+        # of the ranked list. Hardening to 0.50 + 0.50 × coverage:
+        #   100% coverage -> x1.00  (no penalty)
+        #    50% coverage -> x0.75
+        #    20% coverage -> x0.60
+        # The 0.50 floor keeps partial-coverage names visible as candidates
+        # but removes the false parity with fully-covered peers.
         total_possible_weight = sum(w for w in section_weights.values() if w > 0)
         coverage_ratio = total_avail_weight / total_possible_weight if total_possible_weight > 0 else 0.0
-        data_penalty = 0.90 + 0.10 * coverage_ratio
+        data_penalty = 0.50 + 0.50 * coverage_ratio
         composite = composite * data_penalty
 
         logger.debug(

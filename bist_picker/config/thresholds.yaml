@@ -48,6 +48,11 @@ selection:
   max_correlation: 0.70
   correlation_lookback_days: 120  # days of return history for correlation check
   max_target_multiple: 2.5     # cap: target <= entry * 2.5 (150% upside)
+  # Horizon convergence for DCF-derived target price. 0.50 means we assume
+  # price closes HALF the gap to intrinsic value over the rebalance horizon
+  # (~12 months). Historical mean-reversion in TR equities rarely delivers
+  # full intrinsic in a single rebalance period; this makes targets realistic.
+  target_convergence_pct: 0.50
   target_count: 5
   # Phase 3 tightening: 3 -> 2. With 5 picks this guarantees coverage of at
   # least 3 distinct sub-sectors (previously one sector could dominate).
@@ -138,9 +143,13 @@ banking:
       ceiling: 0.05                # NIM >= 5% → score 100
       direction: higher
 
-    loan_growth:                   # YoY loan growth
-      floor: -0.10                 # Growth <= -10% → score 0
-      ceiling: 0.30                # Growth >= 30% → score 100
+    loan_growth:                   # REAL (CPI-deflated) YoY loan growth
+      # Nominal growth was dominated by 40%+ inflation and saturated the old
+      # 30% ceiling for the entire universe. Scored on real basis now:
+      #   real = (1 + nominal) / (1 + CPI_yoy) − 1
+      # A real-shrinking book (< −5%) is weak; +10% real is expansion top-tier.
+      floor: -0.05                 # Real growth <= −5% → score 0
+      ceiling: 0.10                # Real growth >= +10% → score 100
       direction: higher
 
   # Legacy thresholds (kept for reference / other consumers)

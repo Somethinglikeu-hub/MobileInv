@@ -403,11 +403,15 @@ class PortfolioSelector:
         for portfolio_key, picks in all_picks.items():
             p_upper = portfolio_key.upper()
             current_ids = {pick["company_id"] for pick in picks}
-            
+
             # --- 1. Exit Previous Month's Positions ---
-            # All previously 'open' positions for this portfolio are closed.
-            # If they are re-selected today, they will be 're-opened' as new rows.
-            # This reflects the user's "buy/sell every month" strategy.
+            # Only close positions that are NOT being re-selected this rebalance.
+            # Re-selected names retain their original open row (keeping the
+            # original entry_price and selection_date), so the holding period
+            # and cost basis are preserved across rebalances and we stop
+            # fabricating "realised" round-trips when nothing actually traded.
+            # Incoming picks that reuse a held company will have their target /
+            # stop / score / weight refreshed on the existing row below.
             open_positions = (
                 session.query(PortfolioSelection)
                 .filter(
@@ -417,9 +421,13 @@ class PortfolioSelector:
                 )
                 .all()
             )
-            
+
+            carried_positions_by_company: dict[int, PortfolioSelection] = {}
             for pos in open_positions:
-                # Get current price to record exit
+                if pos.company_id in current_ids:
+                    carried_positions_by_company[pos.company_id] = pos
+                    continue
+                # Genuinely exiting: mark this row closed.
                 exit_price = self._get_latest_price(pos.company_id, session)
                 pos.exit_date = self.scoring_date
                 pos.exit_price = exit_price or pos.entry_price
@@ -455,6 +463,30 @@ class PortfolioSelector:
 
             # --- 2. Store New Picks ---
             for pick in picks:
+                # Phase 5: serialise reason chips once per pick.
+                reason_chips = pick.get("reason_top_factors") or []
+                reason_json = (
+                    json.dumps(reason_chips, separators=(",", ":"))
+                    if reason_chips
+                    else None
+                )
+
+                # (a) If this company is a carried incumbent, refresh the
+                # *existing* open row instead of inserting a new one. This
+                # keeps the original entry_price and selection_date intact.
+                carried = carried_positions_by_company.get(pick["company_id"])
+                if carried is not None:
+                    carried.composite_score = pick["score"]
+                    carried.target_price = pick["target_price"]
+                    carried.stop_loss_price = pick["stop_loss"]
+                    carried.weight = pick.get("weight")
+                    carried.cash_state = pick.get("cash_state")
+                    carried.cash_pct = pick.get("cash_pct")
+                    carried.reason_top_factors_json = reason_json
+                    continue
+
+                # (b) Same-day re-run: update the in-progress row we may
+                # have written earlier today.
                 existing = (
                     session.query(PortfolioSelection)
                     .filter_by(
@@ -463,13 +495,6 @@ class PortfolioSelector:
                         company_id=pick["company_id"],
                     )
                     .first()
-                )
-                # Phase 5: serialise reason chips once per pick.
-                reason_chips = pick.get("reason_top_factors") or []
-                reason_json = (
-                    json.dumps(reason_chips, separators=(",", ":"))
-                    if reason_chips
-                    else None
                 )
                 if existing:
                     existing.composite_score = pick["score"]
@@ -481,6 +506,7 @@ class PortfolioSelector:
                     existing.cash_pct = pick.get("cash_pct")
                     existing.reason_top_factors_json = reason_json
                 else:
+                    # (c) Genuinely new entry.
                     session.add(
                         PortfolioSelection(
                             portfolio=p_upper,
@@ -870,9 +896,17 @@ class PortfolioSelector:
     ) -> Optional[float]:
         """Derive the target price from DCF MoS or a score-implied upside.
 
-        DCF path:
+        DCF path — horizon-aware convergence:
           MoS% represents (intrinsic - price) / intrinsic.
           => intrinsic = price / (1 - MoS/100)
+          Target is NOT the full intrinsic (markets rarely close the
+          whole gap inside a 12–24 month rebalance horizon). Instead
+          we assume the price converges a fraction ``target_convergence_pct``
+          of the way toward intrinsic over the horizon:
+              target = entry + (intrinsic − entry) × convergence
+          Default convergence = 0.50 (50% of the gap in ~12 months).
+          This both (a) tempers the "MoS=60% ⇒ 2.5× target" overreach
+          and (b) keeps a meaningful upside signal for ranked candidates.
 
         Score-implied fallback:
           Upside = max(10%, (score/100) * 30%).  A 100-score stock implies ~30% upside.
@@ -880,7 +914,6 @@ class PortfolioSelector:
 
         The result is capped at entry_price * max_target_multiple (configurable
         in thresholds.yaml selection.max_target_multiple, default 2.5).
-        This prevents unrealistically large targets from very high DCF MoS values.
         """
         if entry_price is None:
             return None
@@ -890,7 +923,10 @@ class PortfolioSelector:
 
         mos = candidate.get("dcf_mos")
         if mos is not None and 0.0 < mos < 100.0:
-            dcf_target = entry_price / (1.0 - mos / 100.0)
+            intrinsic = entry_price / (1.0 - mos / 100.0)
+            convergence = float(self._cfg.get("target_convergence_pct", 0.50))
+            convergence = max(0.10, min(1.0, convergence))
+            dcf_target = entry_price + (intrinsic - entry_price) * convergence
             return round(min(dcf_target, max_target), 2)
 
         score = candidate.get("score")
