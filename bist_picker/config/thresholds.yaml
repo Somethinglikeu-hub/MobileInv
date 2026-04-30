@@ -1,19 +1,26 @@
 # BIST Stock Picker — Threshold Values for Scoring and Filtering
 
 buffett:
+  # 2026-04-30 audit: tightened thresholds. Old values (5% ROE floor,
+  # 2.0 D/E ceiling) let too many mediocre operators score above zero,
+  # which the percentile-rank step then recycled into the top-N.
   min_roe_5yr: 0.15
-  max_debt_equity: 1.0         # relaxed for Turkey
-  min_gross_margin: 0.25       # relaxed from 0.40 for Turkey
+  max_debt_equity: 1.0         # documentation-only; not used in scoring math
+  min_gross_margin: 0.25       # relaxed from 0.40 for Turkey (BIST has many low-GM sectors)
   min_positive_eps_years: 6    # relaxed from 8 for emerging market
   roe_full_score: 0.25         # ROE >= 25% gets maximum score
-  roe_min_score: 0.05          # ROE below 5% gets zero
+  roe_min_score: 0.08          # ROE below 8% gets zero (was 0.05; below 8% in TRY is below cost of capital)
   debt_equity_ideal: 0.3       # D/E < 0.3 gets full score
-  debt_equity_max: 2.0         # D/E > 2.0 gets zero
+  debt_equity_max: 1.5         # D/E > 1.5 gets zero (was 2.0; above 1.5 is genuinely risky in TRY)
 
 graham:
   max_pe_pb_product: 22.5
   margin_of_safety: 0.25
-  try_bond_yield: 0.30         # TRY 10-year govt bond yield proxy
+  # 2026-04-30 audit: Graham now resolves bond yield dynamically from
+  # MacroRegime.policy_rate_pct at scoring time. This value is only used
+  # as a fallback when no macro row exists. Update if static fallback is
+  # ever exercised (rare on the live pipeline).
+  try_bond_yield: 0.30         # fallback only — runtime value comes from TCMB policy rate
 
 dcf:
   # Dynamic discount rate = TCMB policy rate + equity_risk_premium_try.

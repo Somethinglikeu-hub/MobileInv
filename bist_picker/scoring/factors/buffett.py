@@ -32,6 +32,7 @@ from bist_picker.db.schema import (
     AdjustedMetric,
     Company,
     FinancialStatement,
+    MacroRegime,
 )
 
 logger = logging.getLogger("bist_picker.scoring.factors.buffett")
@@ -81,6 +82,9 @@ class BuffettScorer:
         self._config_path = config_path or _DEFAULT_CONFIG_PATH
         self._thresholds: dict = {}
         self._load_config()
+        # Cache the resolved nominal-deflation rate per scoring run.
+        # See _resolve_inflation_proxy.
+        self._inflation_proxy_cache: Optional[tuple] = None
 
     def _load_config(self) -> None:
         """Load threshold values from thresholds.yaml."""
@@ -171,7 +175,9 @@ class BuffettScorer:
         result["debt_safety"] = self._score_debt_safety(balance_data)
         result["earnings_quality"] = self._score_earnings_quality(metrics)
         result["fcf_quality"] = self._score_fcf_quality(metrics)
-        result["owner_earnings_trend"] = self._score_oe_trend(metrics)
+        result["owner_earnings_trend"] = self._score_oe_trend(
+            metrics, session, scoring_date,
+        )
 
         # Calculate weighted combined score
         result["buffett_combined"] = self._calculate_combined(result)
@@ -334,11 +340,28 @@ class BuffettScorer:
         positive = sum(1 for f in fcf_values if f > 0)
         return (positive / len(fcf_values)) * 100.0
 
-    def _score_oe_trend(self, metrics: list[AdjustedMetric]) -> Optional[float]:
+    def _score_oe_trend(
+        self,
+        metrics: list[AdjustedMetric],
+        session: Optional[Session] = None,
+        scoring_date: Optional[_date] = None,
+    ) -> Optional[float]:
         """Score based on owner earnings growth trend (regression slope).
 
         Positive slope -> higher score. Uses linear regression on OE values.
         Score: 0 if slope <= 0, linear to 100 for strong positive trends.
+
+        2026-04-30 audit: Owner earnings are reported in nominal TRY. With
+        Turkey's 50-85% YoY CPI in 2021-2024, a company whose REAL earnings
+        are flat shows large nominal upward slope and used to score 100/100.
+        We now subtract an inflation pass-through proxy from the relative
+        slope so the score reflects real, not nominal, growth.
+
+        Proxy resolution (first non-null wins):
+          1. MacroRegime.inflation_expectation_24m_pct on/before scoring_date
+          2. MacroRegime.cpi_yoy_pct on/before scoring_date
+          3. None -> no deflation (test fixtures that don't populate macro
+             keep their historical scoring behavior)
         """
         oe_values = [m.owner_earnings for m in metrics if m.owner_earnings is not None]
         if len(oe_values) < _MIN_YEARS:
@@ -362,8 +385,57 @@ class BuffettScorer:
         # Normalize slope relative to magnitude
         relative_slope = slope / mean_abs
 
+        # Subtract inflation pass-through so the slope reflects real growth.
+        inflation = self._resolve_inflation_proxy(session, scoring_date)
+        if inflation is not None:
+            relative_slope = relative_slope - inflation
+
         # Score: -0.2 or worse -> 0, +0.3 or better -> 100
         return _linear_scale(relative_slope, -0.2, 0.3)
+
+    def _resolve_inflation_proxy(
+        self,
+        session: Optional[Session],
+        scoring_date: Optional[_date],
+    ) -> Optional[float]:
+        """Return a TRY inflation proxy for deflating nominal series.
+
+        Prefers `inflation_expectation_24m_pct` (forward-looking, more stable
+        than spot CPI). Falls back to `cpi_yoy_pct`. Returns None if no
+        macro row exists, so unit tests without seeded macro data preserve
+        the pre-fix nominal scoring behavior.
+        """
+        if self._inflation_proxy_cache is not None and self._inflation_proxy_cache[0] == scoring_date:
+            return self._inflation_proxy_cache[1]
+
+        if session is None:
+            self._inflation_proxy_cache = (scoring_date, None)
+            return None
+
+        query = session.query(MacroRegime)
+        if scoring_date is not None:
+            query = query.filter(MacroRegime.date <= scoring_date)
+        latest = query.order_by(MacroRegime.date.desc()).first()
+
+        if latest is None:
+            self._inflation_proxy_cache = (scoring_date, None)
+            return None
+
+        # Prefer forward-looking expectation (24m), fallback to spot YoY.
+        proxy = latest.inflation_expectation_24m_pct
+        if proxy is None:
+            proxy = latest.cpi_yoy_pct
+        if proxy is None or proxy <= 0:
+            self._inflation_proxy_cache = (scoring_date, None)
+            return None
+
+        proxy = float(proxy)
+        logger.debug(
+            "Buffett OE-trend inflation deflator: %.1f%% (as of %s)",
+            proxy * 100, latest.date,
+        )
+        self._inflation_proxy_cache = (scoring_date, proxy)
+        return proxy
 
     # ---- Combined score ----
 

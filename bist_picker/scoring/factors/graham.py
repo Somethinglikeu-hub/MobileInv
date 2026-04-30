@@ -30,6 +30,7 @@ from bist_picker.db.schema import (
     Company,
     DailyPrice,
     FinancialStatement,
+    MacroRegime,
 )
 
 logger = logging.getLogger("bist_picker.scoring.factors.graham")
@@ -69,6 +70,9 @@ class GrahamScorer:
         self._config_path = config_path or _DEFAULT_CONFIG_PATH
         self._thresholds: dict = {}
         self._load_config()
+        # Cache the resolved bond yield per scoring_date so we don't re-query
+        # MacroRegime once per company. Mirrors dcf._resolve_discount_rate.
+        self._bond_yield_cache: Optional[tuple] = None
 
     def _load_config(self) -> None:
         """Load threshold values from thresholds.yaml."""
@@ -166,7 +170,7 @@ class GrahamScorer:
             latest_metric, balance, shares, current_price,
         )
         result["graham_growth_value"] = self._score_graham_growth(
-            metrics, current_price,
+            metrics, current_price, session, scoring_date,
         )
 
         # Calculate combined score
@@ -276,6 +280,8 @@ class GrahamScorer:
         self,
         metrics: list[AdjustedMetric],
         price: float,
+        session: Optional[Session] = None,
+        scoring_date: Optional[date] = None,
     ) -> Optional[float]:
         """Score based on Graham Growth Formula intrinsic value vs price.
 
@@ -328,9 +334,7 @@ class GrahamScorer:
         else:
             g = default_g_pct
 
-        bond_yield = self._thresholds.get("try_bond_yield", 0.30)
-        if bond_yield <= 0:
-            bond_yield = 0.30
+        bond_yield = self._resolve_bond_yield(session, scoring_date)
 
         # Graham Growth Formula: V = EPS * (8.5 + 2g) * (4.4/Y)
         intrinsic_value = latest_eps * (8.5 + 2.0 * g) * (4.4 / (bond_yield * 100))
@@ -340,6 +344,62 @@ class GrahamScorer:
 
         ratio = intrinsic_value / price
         return _linear_scale(ratio, 0.5, 1.5)
+
+    # ---- Dynamic TRY bond yield ----
+
+    def _resolve_bond_yield(
+        self,
+        session: Optional[Session],
+        scoring_date: Optional[date],
+    ) -> float:
+        """Return the TRY nominal yield used in Graham's V = EPS*(8.5+2g)*(4.4/Y).
+
+        2026-04-30 audit: previously hardcoded to 0.30 in thresholds.yaml.
+        That value drifts 15-20% off intrinsic values whenever TCMB moves
+        the policy rate. We now use MacroRegime.policy_rate_pct as a
+        defensible TRY rate proxy (the curve is typically inverted in
+        Turkey, so the policy rate sits close to the long end), falling
+        back to the YAML value only when no macro row exists.
+
+        Cached per scoring_date so this only queries once per scoring run.
+        """
+        if self._bond_yield_cache is not None and self._bond_yield_cache[0] == scoring_date:
+            return self._bond_yield_cache[1]
+
+        fallback = float(self._thresholds.get("try_bond_yield", 0.30))
+        if fallback <= 0:
+            fallback = 0.30
+
+        if session is None:
+            self._bond_yield_cache = (scoring_date, fallback)
+            return fallback
+
+        query = session.query(MacroRegime).filter(
+            MacroRegime.policy_rate_pct.isnot(None),
+        )
+        if scoring_date is not None:
+            query = query.filter(MacroRegime.date <= scoring_date)
+        latest = query.order_by(MacroRegime.date.desc()).first()
+
+        if latest is None or latest.policy_rate_pct is None:
+            logger.info(
+                "Graham: no MacroRegime policy rate; using static %.1f%%",
+                fallback * 100,
+            )
+            self._bond_yield_cache = (scoring_date, fallback)
+            return fallback
+
+        y = float(latest.policy_rate_pct)
+        if y <= 0:
+            self._bond_yield_cache = (scoring_date, fallback)
+            return fallback
+
+        logger.info(
+            "Graham bond yield: %.2f%% (TCMB policy rate as of %s)",
+            y * 100, latest.date,
+        )
+        self._bond_yield_cache = (scoring_date, y)
+        return y
 
     # ---- Combined score ----
 
