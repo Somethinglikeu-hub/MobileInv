@@ -34,6 +34,7 @@ from bist_picker.data.sources.tcmb import TCMBClient
 from bist_picker.data.sources.yahoo import YahooClient
 from bist_picker.db.schema import (
     Company,
+    CpiHistory,
     DailyPrice,
     FinancialStatement,
     MacroRegime,
@@ -514,9 +515,16 @@ class DataFetcher:
         end = date.today()
         start = date(end.year - 2, 1, 1)
 
-        # CPI
+        # CPI: keep the 2-year window for the YoY scalar (used elsewhere),
+        # but fetch a deeper 8-year window separately for cpi_history so
+        # downstream real-growth calcs over 5+ years of financials have
+        # full coverage. fetch_cpi_index is cached for 24h, so the extra
+        # range only hits the wire on a stale cache.
         cpi = self._tcmb.fetch_cpi_index(start, end)
         stats["cpi_points"] = len(cpi)
+        cpi_history_start = date(end.year - 8, 1, 1)
+        cpi_history_series = self._tcmb.fetch_cpi_index(cpi_history_start, end)
+        stats["cpi_history_points"] = len(cpi_history_series)
 
         # Exchange rates — try TCMB first, fall back to Yahoo
         fx = self._tcmb.fetch_exchange_rates(start, end)
@@ -593,6 +601,11 @@ class DataFetcher:
                 self._session.add(regime)
             self._session.flush()
 
+        # Persist the full CPI index series into cpi_history. Idempotent
+        # upsert by date — required so cleaning.inflation.calculate_real_growth
+        # has access to actual index levels, not just YoY scalars.
+        self._upsert_cpi_history(cpi_history_series)
+
         policy_str = f"{policy_rate:.1%}" if policy_rate else "N/A"
         inflation_str = f"{inflation:.1%}" if inflation else "N/A"
         exp24_str = f"{inflation_exp_24m:.1%}" if inflation_exp_24m else "N/A"
@@ -600,9 +613,62 @@ class DataFetcher:
             f"  Macro: {stats['cpi_points']} CPI points, "
             f"{stats['fx_points']} FX points (source: {fx_source}), "
             f"policy rate={policy_str}, inflation={inflation_str}, "
-            f"24m CPI exp={exp24_str}"
+            f"24m CPI exp={exp24_str}, "
+            f"cpi_history rows persisted={stats.get('cpi_history_points', 0)}"
         )
         return stats
+
+    def _upsert_cpi_history(self, cpi_series: "pd.Series") -> None:
+        """Idempotently upsert a CPI index series into the cpi_history table.
+
+        Args:
+            cpi_series: pandas Series with date index and CPI index level
+                values (TCMB TP.FG.J0, base 2003=100). May be empty.
+        """
+        if cpi_series is None or cpi_series.empty:
+            return
+
+        # Single bulk read of existing rows in the date range, then in-memory diff.
+        # Avoids N round-trips per fetch.
+        dates_to_upsert: list[date] = []
+        for raw_date in cpi_series.index:
+            try:
+                d = pd.Timestamp(raw_date).date()
+            except Exception:
+                continue
+            dates_to_upsert.append(d)
+
+        if not dates_to_upsert:
+            return
+
+        existing_rows = (
+            self._session.query(CpiHistory)
+            .filter(CpiHistory.date.in_(dates_to_upsert))
+            .all()
+        )
+        existing_by_date = {row.date: row for row in existing_rows}
+
+        for raw_date, raw_val in cpi_series.items():
+            try:
+                d = pd.Timestamp(raw_date).date()
+            except Exception:
+                continue
+            if pd.isna(raw_val):
+                continue
+            try:
+                val = float(raw_val)
+            except (TypeError, ValueError):
+                continue
+            if val <= 0:
+                continue
+
+            row = existing_by_date.get(d)
+            if row is None:
+                self._session.add(CpiHistory(date=d, cpi_index=val))
+            else:
+                row.cpi_index = val
+
+        self._session.flush()
 
     def fetch_insiders(
         self,

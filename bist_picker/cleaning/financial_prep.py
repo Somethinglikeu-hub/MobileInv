@@ -32,6 +32,7 @@ from bist_picker.cleaning.inflation import InflationAdjuster, _find_item_by_code
 from bist_picker.db.schema import (
     AdjustedMetric,
     Company,
+    CpiHistory,
     FinancialStatement,
     MacroRegime,
 )
@@ -506,24 +507,60 @@ class MetricsCalculator:
             return None
 
     def _get_cpi_series(self) -> Optional[pd.Series]:
-        """Load CPI data from the macro_regime table.
+        """Load CPI index level series for inflation adjustments.
+
+        2026-04-30 audit fix: previously this loaded `macro_regime.cpi_yoy_pct`
+        (a YoY rate, e.g. 0.65 = 65%) and fed it into
+        `InflationAdjuster.calculate_real_growth`, which expects CPI index
+        levels and computes `cpi_current / cpi_previous - 1` to derive
+        period-over-period inflation. Feeding YoY scalars made
+        `real_eps_growth_pct` meaningless. We now read TCMB TP.FG.J0 monthly
+        index levels from the dedicated `cpi_history` table populated by
+        `data.fetcher._upsert_cpi_history`.
+
+        Falls back to the legacy MacroRegime YoY path if cpi_history is
+        empty (e.g., a DB seeded before the fix has run a fetch). The
+        legacy path keeps the previous (broken) behavior to avoid silent
+        regressions; correctness recovers as soon as fetch_macro runs.
 
         Returns:
-            pandas Series with date index and CPI YoY % values,
-            or None if no data is available.
+            pandas Series with DatetimeIndex and CPI index level values,
+            or None if no CPI data is available at all.
         """
         if self._cpi_series is not None:
             return self._cpi_series
 
+        rows = (
+            self._session.query(CpiHistory.date, CpiHistory.cpi_index)
+            .order_by(CpiHistory.date)
+            .all()
+        )
+
+        if rows:
+            dates = [r[0] for r in rows]
+            values = [r[1] for r in rows]
+            self._cpi_series = pd.Series(
+                values, index=pd.DatetimeIndex(dates), name="cpi_index"
+            )
+            return self._cpi_series
+
+        # Legacy fallback (cpi_history not populated yet). The
+        # macro_regime.cpi_yoy_pct values are YoY rates not index levels,
+        # so calculate_real_growth produces incorrect numbers from them;
+        # this branch exists only to preserve pre-fix behavior on stale DBs.
+        logger.warning(
+            "cpi_history is empty; falling back to macro_regime.cpi_yoy_pct "
+            "(this produces inaccurate real-growth values until fetch_macro "
+            "populates cpi_history)"
+        )
         rows = (
             self._session.query(MacroRegime.date, MacroRegime.cpi_yoy_pct)
             .filter(MacroRegime.cpi_yoy_pct.isnot(None))
             .order_by(MacroRegime.date)
             .all()
         )
-
         if not rows:
-            logger.debug("No CPI data in macro_regime table")
+            logger.debug("No CPI data in cpi_history or macro_regime")
             return None
 
         dates = [r[0] for r in rows]

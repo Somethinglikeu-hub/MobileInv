@@ -124,15 +124,27 @@ python -m bist_picker export-mobile-feed --feed-dir mobile-feed-dist --base-down
      so unit tests without seeded macro keep their nominal scoring).
      Companies whose nominal "growth" is just CPI pass-through no longer
      score 100/100 on OE trend; they score around 50.
-  - Note for future sessions: `MacroRegime.cpi_yoy_pct` stores a YoY rate
-    (e.g., 0.65), NOT a CPI index level. `cleaning/inflation.py
-    .calculate_real_growth` was written assuming index levels and divides
-    cpi_current/cpi_previous, so the stored `real_eps_growth_pct` field is
-    junk. It's only displayed (mobile_snapshot, dashboard), not used in
-    scoring, so it's a separate cleanup. Proper fix: add a CPI history
-    table fed from `tcmb.fetch_cpi_index` (already returns the index level).
+  4. Fixed CPI history storage. Added a `cpi_history` table
+     (`db/schema.py:CpiHistory`) holding TCMB TP.FG.J0 monthly index
+     levels. `data/fetcher.py:_upsert_cpi_history` now persists an 8-year
+     CPI window on every macro fetch (cached by tcmb client, so no
+     extra API cost on warm runs). `cleaning/financial_prep.py
+     :_get_cpi_series` reads index levels from this table first; the
+     legacy `MacroRegime.cpi_yoy_pct` path is kept as a clearly-warned
+     fallback only. Result: `calculate_real_growth` finally gets the
+     CPI index levels it was designed for, so `real_eps_growth_pct` in
+     `adjusted_metrics` becomes meaningful (currently surfaced in the
+     mobile snapshot + dashboard, and now also exposed by the
+     `web/review.html` reviewer). Tests in `tests/test_cpi_history.py`
+     pin the new behavior and document the legacy fallback's known
+     wrongness.
+  5. Added `web/review.html` — single-file static viewer that fetches
+     the public manifest + snapshot, opens the SQLite in-browser via
+     sql.js + pako, and renders the 5 picks with full scoring detail.
+     Open the file directly in a browser, or host it on
+     MobileInv-feed/gh-pages alongside the snapshot.
   - Outstanding (in priority order): re-enable backtest with point-in-time
-    integrity & delisted tickers; fix CPI history storage so
-    `real_eps_growth_pct` is correct; enforce real `publication_date <=
+    integrity & delisted tickers; enforce real `publication_date <=
     scoring_date` (drop the 76-day heuristic); replace optimizer's
-    hand-cooked objective with portfolio Sharpe.
+    hand-cooked objective with portfolio Sharpe; consider also
+    inflation-adjusting Buffett ROE/ROA the way OE-trend now is.

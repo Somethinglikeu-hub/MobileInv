@@ -306,6 +306,30 @@ class MacroRegime(Base):
     updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
 
+class CpiHistory(Base):
+    """Monthly CPI index levels from TCMB EVDS series TP.FG.J0 (base 2003=100).
+
+    2026-04-30 audit: previously the only CPI data persisted was a single
+    YoY scalar in `macro_regime.cpi_yoy_pct`. Downstream code in
+    `cleaning.inflation.calculate_real_growth` expects index levels (it
+    computes `cpi_current / cpi_previous - 1` to get period-over-period
+    inflation), so feeding it YoY rates produced garbage `real_eps_growth_pct`
+    values. This table stores the actual monthly index series so the math
+    works.
+
+    Populated by `data.fetcher.fetch_macro` on every pipeline run; rows are
+    upserted by date.
+    """
+
+    __tablename__ = "cpi_history"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    date: date = Column(Date, nullable=False, unique=True, index=True)
+    cpi_index: float = Column(Float, nullable=False)
+    created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at: datetime = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
 class CashAllocationState(Base):
     """Phase 4: daily persisted state of the portfolio cash-out signal.
 
