@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MobileInv — Snapshot Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c232c;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding: 12px 16px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; margin-bottom: 24px;
+  }
+  .toolbar input[type="text"] {
+    flex: 1 1 360px; min-width: 240px;
+    padding: 8px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; font-family: var(--mono);
+    font-size: 12px;
+  }
+  .toolbar button, .toolbar label.file-btn {
+    padding: 8px 14px; background: var(--accent); color: #0d1117; border: none;
+    border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .toolbar button:hover, .toolbar label.file-btn:hover { filter: brightness(1.1); }
+  .toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toolbar input[type="file"] { display: none; }
+  .toolbar .status {
+    color: var(--muted); font-size: 12px; font-family: var(--mono);
+    flex-basis: 100%; margin-top: 4px;
+  }
+  .status.error { color: var(--red); }
+  .status.loading { color: var(--yellow); }
+  .status.ok { color: var(--green); }
+  section.card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; margin-bottom: 24px;
+  }
+  section.card > h2 {
+    font-size: 14px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; color: var(--text);
+  }
+  .card-body { padding: 16px; }
+  .grid { display: grid; gap: 12px 24px; }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .kv { display: flex; flex-direction: column; gap: 2px; }
+  .kv .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .kv .v { color: var(--text); font-family: var(--mono); font-size: 14px; }
+  .kv .v.num { font-feature-settings: "tnum"; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  table th, table td {
+    padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border);
+  }
+  table th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+  table th:first-child, table td:first-child { text-align: left; }
+  table tr.pick-row { cursor: pointer; }
+  table tr.pick-row:hover { background: var(--panel-2); }
+  table tr.pick-row.selected { background: var(--panel-2); outline: 1px solid var(--accent); }
+  .ticker { color: var(--accent); font-weight: 600; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neutral { color: var(--muted); }
+  .chip {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 11px; font-family: var(--mono); color: var(--muted);
+    margin-right: 4px; margin-bottom: 4px;
+  }
+  .chip.flag { background: rgba(248, 81, 73, 0.1); border-color: var(--red); color: var(--red); }
+  .chip.factor { background: rgba(88, 166, 255, 0.1); border-color: var(--accent); color: var(--accent); }
+  .empty { color: var(--muted); padding: 16px; text-align: center; font-style: italic; }
+  details summary { cursor: pointer; padding: 8px 16px; color: var(--muted); user-select: none; }
+  details summary:hover { color: var(--text); }
+  details[open] summary { color: var(--text); border-bottom: 1px solid var(--border); }
+  pre {
+    background: var(--panel-2); border: 1px solid var(--border);
+    padding: 12px; border-radius: 4px; overflow-x: auto;
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    margin: 8px 16px;
+  }
+  .footer {
+    text-align: center; color: var(--muted); font-size: 11px;
+    padding: 24px; border-top: 1px solid var(--border); margin-top: 32px;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MobileInv — Snapshot Review</h1>
+  <div class="meta" id="header-meta">no snapshot loaded</div>
+</header>
+
+<main>
+  <div class="toolbar">
+    <input type="text" id="manifest-url" value="https://raw.githubusercontent.com/Somethinglikeu-hub/MobileInv-feed/gh-pages/manifest.json" />
+    <button id="load-remote">Load from feed</button>
+    <label class="file-btn" for="file-input">Or open local .db.gz</label>
+    <input type="file" id="file-input" accept=".gz,.db" />
+    <div class="status" id="status">Idle. Click "Load from feed" to fetch the latest published snapshot.</div>
+  </div>
+
+  <section class="card" id="meta-card" hidden>
+    <h2>Snapshot</h2>
+    <div class="card-body">
+      <div class="grid grid-3" id="meta-grid"></div>
+    </div>
+  </section>
+
+  <section class="card" id="macro-card" hidden>
+    <h2>Macro &amp; Cash</h2>
+    <div class="card-body">
+      <div class="grid grid-4" id="macro-grid"></div>
+    </div>
+  </section>
+
+  <section class="card" id="picks-card" hidden>
+    <h2>Open Positions (the 5 picks)</h2>
+    <div class="card-body" style="padding: 0;">
+      <table id="picks-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th>Sector</th>
+            <th>Entry</th>
+            <th>Current</th>
+            <th>P&amp;L %</th>
+            <th>Target</th>
+            <th>Stop</th>
+            <th>Score</th>
+            <th>DCF MoS</th>
+            <th>Days held</th>
+          </tr>
+        </thead>
+        <tbody id="picks-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="detail-card" hidden>
+    <h2 id="detail-title">Pick detail</h2>
+    <div class="card-body">
+      <div class="grid grid-3" id="detail-grid"></div>
+      <h3 style="font-size: 12px; color: var(--muted); margin-top: 24px; text-transform: uppercase; letter-spacing: 0.05em;">Top factors</h3>
+      <div id="detail-factors"></div>
+      <h3 style="font-size: 12px; color: var(--muted); margin-top: 16px; text-transform: uppercase; letter-spacing: 0.05em;">Quality flags</h3>
+      <div id="detail-flags"></div>
+      <h3 style="font-size: 12px; color: var(--muted); margin-top: 16px; text-transform: uppercase; letter-spacing: 0.05em;">DCF</h3>
+      <div class="grid grid-4" id="detail-dcf"></div>
+      <h3 style="font-size: 12px; color: var(--muted); margin-top: 16px; text-transform: uppercase; letter-spacing: 0.05em;">Latest financials (adjusted)</h3>
+      <div class="grid grid-4" id="detail-fin"></div>
+      <h3 style="font-size: 12px; color: var(--muted); margin-top: 16px; text-transform: uppercase; letter-spacing: 0.05em;">Full scoring breakdown</h3>
+      <div class="grid grid-4" id="detail-scoring"></div>
+    </div>
+  </section>
+
+  <section class="card" id="closed-card" hidden>
+    <h2>Recent closed positions</h2>
+    <div class="card-body" style="padding: 0;">
+      <table id="closed-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th>Selected</th>
+            <th>Exited</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>P&amp;L %</th>
+          </tr>
+        </thead>
+        <tbody id="closed-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="footer">
+  Reads the public mobile feed at
+  <a href="https://github.com/Somethinglikeu-hub/MobileInv-feed/tree/gh-pages" target="_blank" rel="noopener">MobileInv-feed</a>.
+  Opens the SQLite snapshot in-browser via
+  <a href="https://sql.js.org" target="_blank" rel="noopener">sql.js</a> and
+  <a href="https://github.com/nodeca/pako" target="_blank" rel="noopener">pako</a>.
+  No data leaves your browser.
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<script>
+const SQL_WASM_URL = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.wasm';
+
+const statusEl = document.getElementById('status');
+const headerMetaEl = document.getElementById('header-meta');
+const urlEl = document.getElementById('manifest-url');
+const loadBtn = document.getElementById('load-remote');
+const fileInput = document.getElementById('file-input');
+
+let SQL = null;
+let db = null;
+
+function setStatus(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function fmtPct(n, digits = 1) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return (n * 100).toFixed(digits) + '%';
+}
+function fmtPctRaw(n, digits = 1) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return n.toFixed(digits) + '%';
+}
+function fmtNum(n, digits = 2) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function fmtInt(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-US');
+}
+function fmtTry(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  return '₺' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtMoney(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (abs >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (abs >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return n.toFixed(2);
+}
+function pnlClass(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return 'neutral';
+  return n > 0 ? 'pos' : n < 0 ? 'neg' : 'neutral';
+}
+
+function kv(label, value, cls) {
+  const el = document.createElement('div');
+  el.className = 'kv';
+  const k = document.createElement('div'); k.className = 'k'; k.textContent = label;
+  const v = document.createElement('div'); v.className = 'v num ' + (cls || ''); v.textContent = value;
+  el.appendChild(k); el.appendChild(v);
+  return el;
+}
+
+function rowsAsObjects(stmt) {
+  const out = [];
+  while (stmt.step()) out.push(stmt.getAsObject());
+  stmt.free();
+  return out;
+}
+function queryAll(sql, params) {
+  const stmt = db.prepare(sql);
+  if (params) stmt.bind(params);
+  return rowsAsObjects(stmt);
+}
+function queryOne(sql, params) {
+  const rows = queryAll(sql, params);
+  return rows[0] || null;
+}
+
+async function ensureSql() {
+  if (SQL) return SQL;
+  setStatus('Initializing sql.js…', 'loading');
+  SQL = await initSqlJs({ locateFile: () => SQL_WASM_URL });
+  return SQL;
+}
+
+async function loadFromFeed() {
+  loadBtn.disabled = true;
+  try {
+    await ensureSql();
+    const manifestUrl = urlEl.value.trim();
+    setStatus('Fetching manifest…', 'loading');
+    const manifestRes = await fetch(manifestUrl, { cache: 'no-store' });
+    if (!manifestRes.ok) throw new Error('Manifest fetch failed: HTTP ' + manifestRes.status);
+    const manifest = await manifestRes.json();
+    const snapshotUrl = manifest.downloadUrl || new URL('mobile_snapshot.db.gz', manifestUrl).href;
+    setStatus('Fetching snapshot (' + (manifest.sizeBytes ? (manifest.sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : '?') + ')…', 'loading');
+    const snapRes = await fetch(snapshotUrl, { cache: 'no-store' });
+    if (!snapRes.ok) throw new Error('Snapshot fetch failed: HTTP ' + snapRes.status);
+    const gz = new Uint8Array(await snapRes.arrayBuffer());
+    setStatus('Decompressing…', 'loading');
+    const raw = pako.ungzip(gz);
+    setStatus('Opening database…', 'loading');
+    if (db) db.close();
+    db = new SQL.Database(raw);
+    setStatus('Loaded from feed (manifest exportedAt: ' + (manifest.exportedAt || '?') + ')', 'ok');
+    render();
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e.message || e), 'error');
+  } finally {
+    loadBtn.disabled = false;
+  }
+}
+
+async function loadFromFile(file) {
+  try {
+    await ensureSql();
+    setStatus('Reading ' + file.name + '…', 'loading');
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let raw;
+    if (file.name.endsWith('.gz') || (buf[0] === 0x1f && buf[1] === 0x8b)) {
+      setStatus('Decompressing…', 'loading');
+      raw = pako.ungzip(buf);
+    } else {
+      raw = buf;
+    }
+    if (db) db.close();
+    db = new SQL.Database(raw);
+    setStatus('Loaded ' + file.name, 'ok');
+    render();
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e.message || e), 'error');
+  }
+}
+
+function render() {
+  if (!db) return;
+  renderMeta();
+  renderMacro();
+  renderPicks();
+  renderClosed();
+  document.getElementById('detail-card').hidden = true;
+}
+
+function renderMeta() {
+  const meta = queryOne('SELECT * FROM snapshot_metadata WHERE id = 1');
+  const grid = document.getElementById('meta-grid');
+  grid.innerHTML = '';
+  if (!meta) {
+    document.getElementById('meta-card').hidden = true;
+    return;
+  }
+  document.getElementById('meta-card').hidden = false;
+  grid.appendChild(kv('Snapshot date', meta.snapshot_date || '—'));
+  grid.appendChild(kv('Exported at (UTC)', meta.exported_at || '—'));
+  grid.appendChild(kv('Latest price date', meta.latest_price_date || '—'));
+  grid.appendChild(kv('Companies', fmtInt(meta.company_count)));
+  grid.appendChild(kv('Scoring rows', fmtInt(meta.scoring_row_count)));
+  grid.appendChild(kv('Schema version', meta.schema_version || '—'));
+  headerMetaEl.textContent = (meta.snapshot_date || '?') + ' · exported ' + (meta.exported_at || '?');
+}
+
+function renderMacro() {
+  const home = queryOne('SELECT * FROM home_summary WHERE id = 1');
+  const grid = document.getElementById('macro-grid');
+  grid.innerHTML = '';
+  if (!home) {
+    document.getElementById('macro-card').hidden = true;
+    return;
+  }
+  document.getElementById('macro-card').hidden = false;
+  grid.appendChild(kv('Macro date', home.macro_date || '—'));
+  grid.appendChild(kv('Policy rate', fmtPct(home.policy_rate_pct)));
+  grid.appendChild(kv('CPI YoY', fmtPct(home.cpi_yoy_pct)));
+  grid.appendChild(kv('USD/TRY', fmtNum(home.usdtry_rate, 4)));
+  grid.appendChild(kv('Regime', home.regime || '—'));
+  grid.appendChild(kv('Cash state', home.cash_state || '—'));
+  grid.appendChild(kv('Cash %', fmtPct(home.cash_pct)));
+  grid.appendChild(kv('Cash days in state', fmtInt(home.cash_days_in_state)));
+  grid.appendChild(kv('Win rate', fmtPct(home.win_rate)));
+  grid.appendChild(kv('Avg total return', fmtPct(home.total_return_avg)));
+  grid.appendChild(kv('Avg active return', fmtPct(home.active_return_avg)));
+  grid.appendChild(kv('Benchmark YTD', fmtPct(home.benchmark_ytd)));
+}
+
+function renderPicks() {
+  const picks = queryAll('SELECT op.*, c.sector_bist FROM open_positions op LEFT JOIN companies c ON c.id = op.company_id ORDER BY op.sort_order ASC');
+  const tbody = document.getElementById('picks-tbody');
+  tbody.innerHTML = '';
+  if (!picks.length) {
+    document.getElementById('picks-card').hidden = true;
+    return;
+  }
+  document.getElementById('picks-card').hidden = false;
+  for (const p of picks) {
+    const tr = document.createElement('tr');
+    tr.className = 'pick-row';
+    tr.dataset.companyId = p.company_id;
+    tr.innerHTML = `
+      <td><span class="ticker">${p.ticker || '?'}</span></td>
+      <td style="text-align:left">${p.name || '—'}</td>
+      <td style="text-align:left">${p.sector_bist || '—'}</td>
+      <td>${fmtTry(p.entry_price)}</td>
+      <td>${fmtTry(p.current_price)}</td>
+      <td class="${pnlClass(p.pnl_pct)}">${p.pnl_pct == null ? '—' : (p.pnl_pct * 100).toFixed(2) + '%'}</td>
+      <td>${fmtTry(p.target_price)}</td>
+      <td>${fmtTry(p.stop_loss_price)}</td>
+      <td>${p.composite_score == null ? '—' : p.composite_score.toFixed(1)}</td>
+      <td>${fmtPct(p.dcf_margin_of_safety_pct)}</td>
+      <td>${fmtInt(p.days_held)}</td>
+    `;
+    tr.addEventListener('click', () => selectPick(p, tr));
+    tbody.appendChild(tr);
+  }
+}
+
+function selectPick(pick, row) {
+  document.querySelectorAll('tr.pick-row.selected').forEach(r => r.classList.remove('selected'));
+  row.classList.add('selected');
+  document.getElementById('detail-card').hidden = false;
+  document.getElementById('detail-title').textContent = (pick.ticker || '?') + ' — ' + (pick.name || '');
+
+  const grid = document.getElementById('detail-grid');
+  grid.innerHTML = '';
+  grid.appendChild(kv('Selection date', pick.selection_date || '—'));
+  grid.appendChild(kv('Entry → Current', fmtTry(pick.entry_price) + ' → ' + fmtTry(pick.current_price)));
+  grid.appendChild(kv('P&L %', pick.pnl_pct == null ? '—' : (pick.pnl_pct * 100).toFixed(2) + '%', pnlClass(pick.pnl_pct)));
+  grid.appendChild(kv('Target / Stop', fmtTry(pick.target_price) + ' / ' + fmtTry(pick.stop_loss_price)));
+  grid.appendChild(kv('Stop % from entry', fmtPct(pick.stop_pct_from_entry)));
+  grid.appendChild(kv('Days held', fmtInt(pick.days_held)));
+  grid.appendChild(kv('Composite score', pick.composite_score == null ? '—' : pick.composite_score.toFixed(1)));
+  grid.appendChild(kv('Portfolio', pick.portfolio || '—'));
+
+  // Top factors (parsed JSON)
+  const factorsEl = document.getElementById('detail-factors');
+  factorsEl.innerHTML = '';
+  if (pick.reason_top_factors_json) {
+    try {
+      const factors = JSON.parse(pick.reason_top_factors_json);
+      if (Array.isArray(factors) && factors.length) {
+        for (const f of factors) {
+          const chip = document.createElement('span');
+          chip.className = 'chip factor';
+          if (typeof f === 'string') chip.textContent = f;
+          else if (f && typeof f === 'object') {
+            chip.textContent = (f.label || f.name || f.factor || JSON.stringify(f)) +
+              (f.score != null ? ` · ${typeof f.score === 'number' ? f.score.toFixed(1) : f.score}` : '');
+          }
+          factorsEl.appendChild(chip);
+        }
+      } else {
+        factorsEl.innerHTML = '<div class="empty">No top factors</div>';
+      }
+    } catch (e) {
+      const pre = document.createElement('pre');
+      pre.textContent = pick.reason_top_factors_json;
+      factorsEl.appendChild(pre);
+    }
+  } else {
+    factorsEl.innerHTML = '<div class="empty">No top factors</div>';
+  }
+
+  // Quality flags
+  const flagsEl = document.getElementById('detail-flags');
+  flagsEl.innerHTML = '';
+  if (pick.quality_flags_json) {
+    try {
+      const flags = JSON.parse(pick.quality_flags_json);
+      const list = Array.isArray(flags) ? flags : Object.entries(flags || {}).filter(([, v]) => v).map(([k]) => k);
+      if (list.length) {
+        for (const f of list) {
+          const chip = document.createElement('span');
+          chip.className = 'chip flag';
+          chip.textContent = typeof f === 'string' ? f : JSON.stringify(f);
+          flagsEl.appendChild(chip);
+        }
+      } else {
+        flagsEl.innerHTML = '<div class="empty">No quality flags</div>';
+      }
+    } catch (e) {
+      const pre = document.createElement('pre'); pre.textContent = pick.quality_flags_json; flagsEl.appendChild(pre);
+    }
+  } else {
+    flagsEl.innerHTML = '<div class="empty">No quality flags</div>';
+  }
+
+  // DCF
+  const dcfEl = document.getElementById('detail-dcf');
+  dcfEl.innerHTML = '';
+  dcfEl.appendChild(kv('Intrinsic value', fmtTry(pick.dcf_intrinsic_value)));
+  dcfEl.appendChild(kv('Margin of safety', fmtPct(pick.dcf_margin_of_safety_pct)));
+  dcfEl.appendChild(kv('Growth rate', fmtPct(pick.dcf_growth_rate_pct)));
+  dcfEl.appendChild(kv('Discount rate', fmtPct(pick.dcf_discount_rate_pct)));
+  dcfEl.appendChild(kv('Terminal growth', fmtPct(pick.dcf_terminal_growth_pct)));
+
+  // Latest adjusted financials
+  const fin = queryOne('SELECT * FROM adjusted_metrics_latest WHERE company_id = $cid', { $cid: pick.company_id });
+  const finEl = document.getElementById('detail-fin');
+  finEl.innerHTML = '';
+  if (fin) {
+    finEl.appendChild(kv('Period end', fin.period_end || '—'));
+    finEl.appendChild(kv('ROE (adj)', fmtPct(fin.roe_adjusted)));
+    finEl.appendChild(kv('ROA (adj)', fmtPct(fin.roa_adjusted)));
+    finEl.appendChild(kv('EPS (adj)', fmtNum(fin.eps_adjusted)));
+    finEl.appendChild(kv('Real EPS growth', fmtPct(fin.real_eps_growth_pct)));
+    finEl.appendChild(kv('Owner earnings', fmtMoney(fin.owner_earnings)));
+    finEl.appendChild(kv('Free cash flow', fmtMoney(fin.free_cash_flow)));
+    finEl.appendChild(kv('Reported NI', fmtMoney(fin.reported_net_income)));
+    finEl.appendChild(kv('Monetary G/L', fmtMoney(fin.monetary_gain_loss)));
+    finEl.appendChild(kv('Maintenance capex', fmtMoney(fin.maintenance_capex)));
+    finEl.appendChild(kv('Growth capex', fmtMoney(fin.growth_capex)));
+    finEl.appendChild(kv('Related party rev %', fmtPct(fin.related_party_revenue_pct)));
+  } else {
+    finEl.innerHTML = '<div class="empty">No financial data</div>';
+  }
+
+  // Full scoring breakdown
+  const sc = queryOne('SELECT * FROM scoring_latest WHERE company_id = $cid', { $cid: pick.company_id });
+  const scEl = document.getElementById('detail-scoring');
+  scEl.innerHTML = '';
+  if (sc) {
+    const fields = [
+      ['Buffett', sc.buffett], ['Graham', sc.graham], ['Piotroski', sc.piotroski],
+      ['Piotroski raw', sc.piotroski_raw], ['Magic Formula', sc.magic_formula],
+      ['Lynch PEG', sc.lynch_peg], ['DCF MoS', sc.dcf_mos], ['Momentum', sc.momentum],
+      ['Technical', sc.technical], ['Dividend', sc.dividend],
+      ['Alpha', sc.alpha], ['Alpha-X score', sc.alpha_x_score],
+      ['Risk', sc.risk], ['Data completeness', sc.data_completeness],
+      ['Free float %', sc.free_float_pct], ['Avg volume TRY', sc.avg_volume_try],
+      ['Model used', sc.model_used], ['Scoring date', sc.scoring_date],
+    ];
+    for (const [label, value] of fields) {
+      let txt;
+      if (value === null || value === undefined) txt = '—';
+      else if (typeof value === 'number') {
+        if (label.includes('%')) txt = fmtPct(value / 100);
+        else if (label === 'Avg volume TRY') txt = fmtMoney(value);
+        else txt = value.toFixed(label === 'Piotroski raw' ? 0 : 2);
+      } else txt = String(value);
+      scEl.appendChild(kv(label, txt));
+    }
+  } else {
+    scEl.innerHTML = '<div class="empty">No scoring data</div>';
+  }
+
+  document.getElementById('detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderClosed() {
+  const closed = queryAll('SELECT * FROM portfolio_history ORDER BY exit_date DESC, sort_order ASC LIMIT 50');
+  const tbody = document.getElementById('closed-tbody');
+  tbody.innerHTML = '';
+  if (!closed.length) {
+    document.getElementById('closed-card').hidden = true;
+    return;
+  }
+  document.getElementById('closed-card').hidden = false;
+  for (const r of closed) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="ticker">${r.ticker || '?'}</span></td>
+      <td style="text-align:left">${r.name || '—'}</td>
+      <td>${r.selection_date || '—'}</td>
+      <td>${r.exit_date || '—'}</td>
+      <td>${fmtTry(r.entry_price)}</td>
+      <td>${fmtTry(r.exit_price)}</td>
+      <td class="${pnlClass(r.pnl_pct)}">${r.pnl_pct == null ? '—' : (r.pnl_pct * 100).toFixed(2) + '%'}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+loadBtn.addEventListener('click', loadFromFeed);
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files && e.target.files[0]) loadFromFile(e.target.files[0]);
+});
+</script>
+</body>
+</html>
