@@ -134,11 +134,14 @@ jobs:
 
       - name: Open or update stale-macro issue
         if: steps.macro_check.outputs.is_stale == 'true'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const report = JSON.parse(fs.readFileSync('macro_check.json', 'utf8'));
+            const raw = fs.readFileSync('macro_check.json', 'utf8').trim();
+            if (!raw) { core.warning('macro_check.json is empty — skipping'); return; }
+            const report = JSON.parse(raw);
             const title = '[macro] Update required — Damodaran ERP refresh';
             const lines = [
               'The pipeline detected stale manual-review macro values.',
@@ -182,6 +185,7 @@ jobs:
 
       - name: Close stale-macro issue when fresh
         if: steps.macro_check.outputs.is_stale == 'false'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -216,11 +220,14 @@ jobs:
 
       - name: Notify on cash-state transition
         if: steps.cash_status.outputs.transitioned == 'true'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const snap = JSON.parse(fs.readFileSync('cash_status.json', 'utf8'));
+            const raw = fs.readFileSync('cash_status.json', 'utf8').trim();
+            if (!raw) { core.warning('cash_status.json is empty \u2014 skipping notification'); return; }
+            const snap = JSON.parse(raw);
             const title = `[portfolio] Cash state changed \u2192 ${snap.state}`;
             const lines = [
               `The Phase 4 cash-allocation signal transitioned on **${snap.date}**.`,
@@ -240,14 +247,32 @@ jobs:
               '',
               `_Notes from the state machine:_ ${snap.notes || 'none'}`,
               '',
-              '_This issue is opened automatically by the Publish Mobile Feed workflow._',
+              '_This issue is opened automatically by the Publish Mobile Feed workflow and will close when the state next changes._',
             ];
             const body = lines.join('\n');
             const { owner, repo } = context.repo;
-            const created = await github.rest.issues.create({
-              owner, repo, title, body, labels: ['cash-signal'],
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'cash-signal',
+              per_page: 50,
             });
-            core.info(`Opened cash-state issue #${created.data.number}`);
+            const match = existing.data.find(i => i.title === title);
+            if (match) {
+              await github.rest.issues.update({ owner, repo, issue_number: match.number, body });
+              core.info(`Updated existing cash-state issue #${match.number}`);
+            } else {
+              const prev = existing.data.filter(i => i.title !== title);
+              for (const old of prev) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: old.number,
+                  body: `Closing: cash state changed from \`${old.title.split('\u2192 ')[1]}\` to \`${snap.state}\`.`,
+                });
+                await github.rest.issues.update({ owner, repo, issue_number: old.number, state: 'closed' });
+              }
+              const created = await github.rest.issues.create({
+                owner, repo, title, body, labels: ['cash-signal'],
+              });
+              core.info(`Opened cash-state issue #${created.data.number}`);
+            }
 
       - name: Publish manifest and snapshot to public feed repo
         run: |
