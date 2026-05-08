@@ -526,7 +526,11 @@ def _bounded_ratio_score(
 def _alpha_x_risk_score(risk: Optional[str]) -> float:
     """Return a 0-100 investability score for the risk tier."""
     mapping = {"LOW": 100.0, "MEDIUM": 70.0, "HIGH": 15.0}
-    return mapping.get((risk or "").upper(), 50.0)
+    # Guard against NaN/non-string values that pandas coerces in mixed columns;
+    # NaN is falsy in `if not risk` but truthy in `risk or ""` (it's a float).
+    if not isinstance(risk, str):
+        return 50.0
+    return mapping.get(risk.upper(), 50.0)
 
 
 def _alpha_x_signal_raw(row: pd.Series) -> Optional[float]:
@@ -1487,6 +1491,101 @@ def get_all_tickers() -> list[str]:
             .all()
         )
         return [r[0] for r in rows]
+    finally:
+        session.close()
+
+
+# -- Factor history (Sprint 2 §5, 2026-05-08) --
+
+
+def get_factor_history_quarterly(
+    company_ids: list[int],
+    *,
+    quarters: int = 8,
+    end_date: Optional[date] = None,
+) -> pd.DataFrame:
+    """Return quarter-end factor snapshots for the given companies.
+
+    For each company × the last ``quarters`` calendar quarter-ends, picks
+    the closest ``ScoringResult`` row on or before that quarter-end and
+    returns its factor scores. Used to build the v2 mobile sparkline UI:
+    the APK detail screen shows 8 dots per factor (Buffett, DCF, Momentum,
+    Technical) so the user can see whether the score is improving or
+    decaying — which a single point-in-time score can't communicate.
+
+    Output rows are deduped on ``(company_id, scoring_date)`` so a single
+    pipeline that scored two days in a row near a quarter-end won't pollute
+    the sparkline. Companies with fewer than 1 historical scoring row get
+    no rows here (sparkline would be a single dot — useless).
+    """
+    if not company_ids:
+        return pd.DataFrame()
+
+    end_date = end_date or date.today()
+    # Walk backwards 1 quarter at a time. Calendar quarter-ends only — we
+    # don't try to infer fiscal quarters per company; this is a UI hint,
+    # not earnings analysis.
+    targets: list[date] = []
+    cursor_year = end_date.year
+    cursor_q = (end_date.month - 1) // 3 + 1  # 1..4
+    for _ in range(quarters):
+        last_month = cursor_q * 3
+        # Last day of the quarter — easy lookup of next-month-day-1 minus 1.
+        if last_month == 12:
+            quarter_end = date(cursor_year, 12, 31)
+        else:
+            from datetime import timedelta as _td
+            quarter_end = date(cursor_year, last_month + 1, 1) - _td(days=1)
+        targets.append(quarter_end)
+        cursor_q -= 1
+        if cursor_q == 0:
+            cursor_q = 4
+            cursor_year -= 1
+    targets.sort()  # oldest first
+
+    session = _get_session()
+    try:
+        # For each (company, target_date), grab the latest ScoringResult
+        # on or before target_date. Doing this in one SQL pass keeps it
+        # snappy even for ~50 companies × 8 quarters = 400 lookups.
+        from sqlalchemy import func as _func
+        records: list[dict] = []
+        for cid in company_ids:
+            for target in targets:
+                row = (
+                    session.query(ScoringResult)
+                    .filter(
+                        ScoringResult.company_id == cid,
+                        ScoringResult.scoring_date <= target,
+                    )
+                    .order_by(ScoringResult.scoring_date.desc())
+                    .first()
+                )
+                if row is None:
+                    continue
+                records.append({
+                    "company_id": cid,
+                    "quarter_end": target,
+                    "scoring_date": row.scoring_date,
+                    "buffett": row.buffett_score,
+                    "graham": row.graham_score,
+                    "piotroski": row.piotroski_fscore,
+                    "magic_formula": row.magic_formula_rank,
+                    "lynch_peg": row.lynch_peg_score,
+                    "dcf_mos": row.dcf_margin_of_safety_pct,
+                    "momentum": row.momentum_score,
+                    "technical": row.technical_score,
+                    "dividend": row.dividend_score,
+                    "composite_alpha": row.composite_alpha,
+                    "data_completeness": row.data_completeness,
+                })
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+        # Drop dupes when two consecutive quarter-ends both fall back to
+        # the same underlying scoring_date (history gap).
+        df = df.drop_duplicates(subset=["company_id", "scoring_date"])
+        return df
     finally:
         session.close()
 

@@ -145,6 +145,12 @@ class AdjustedMetric(Base):
     id: int = Column(Integer, primary_key=True, autoincrement=True)
     company_id: int = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
     period_end: date = Column(Date, nullable=False)
+    # KAP filing date for the underlying financials (mirrors the latest
+    # FinancialStatement.publication_date used to derive this row). Lets
+    # ScoringContext apply a true point-in-time guard instead of the legacy
+    # 76-day heuristic. NULL on legacy rows — the guard falls back to
+    # period_end + lag in that case (audit CRITICAL #1, 2026-05-07).
+    publication_date: Optional[date] = Column(Date, index=True)
     reported_net_income: Optional[float] = Column(Float)
     monetary_gain_loss: Optional[float] = Column(Float)
     adjusted_net_income: Optional[float] = Column(Float)
@@ -153,6 +159,14 @@ class AdjustedMetric(Base):
     roe_adjusted: Optional[float] = Column(Float)
     roa_adjusted: Optional[float] = Column(Float)
     eps_adjusted: Optional[float] = Column(Float)
+    # CPI-deflated (Fisher) versions, decimal. Added 2026-05-07 (audit
+    # CRITICAL #3): IAS-29 stripping fixes monetary gain/loss but does NOT
+    # convert nominal ROE/ROA to real terms — a Turkish company with 30%
+    # nominal ROE under 50% CPI has roughly -13% real ROE, yet the legacy
+    # roe_adjusted column maxed out the Buffett quality score. Buffett scorer
+    # now prefers roe_real / roa_real when available; falls back to nominal.
+    roe_real: Optional[float] = Column(Float)
+    roa_real: Optional[float] = Column(Float)
     real_eps_growth_pct: Optional[float] = Column(Float)
     related_party_revenue_pct: Optional[float] = Column(Float)
     # Greenwald CapEx decomposition (V2.5 improvement)
@@ -233,12 +247,19 @@ class ScoringResult(Base):
     momentum_score: Optional[float] = Column(Float)
     insider_score: Optional[float] = Column(Float)
     technical_score: Optional[float] = Column(Float)
+    # Raw signal: True when latest close > 200-day SMA. Persisted alongside
+    # the normalized technical_score so the selector can apply an absolute
+    # falling-knife filter (sector-relative percentile alone misses absolute
+    # downtrends — see stock_picking_audit.md MEDIUM #11).
+    above_200ma: Optional[bool] = Column(Boolean)
     dividend_score: Optional[float] = Column(Float)  # Dividend yield + consistency (0-100)
     # Sector-specific model composites (pre-weighted by BankingScorer/HoldingScorer/ReitScorer)
     banking_composite: Optional[float] = Column(Float)
     holding_composite: Optional[float] = Column(Float)
     reit_composite: Optional[float] = Column(Float)
     composite_alpha: Optional[float] = Column(Float)
+    # BETA/DELTA composites were removed 2026-05-07 — YAML weights never
+    # existed, columns retained for legacy DB compatibility (always NULL).
     composite_beta: Optional[float] = Column(Float)
     composite_delta: Optional[float] = Column(Float)
     risk_tier: Optional[str] = Column(String(10))  # HIGH / MEDIUM / LOW
@@ -300,6 +321,11 @@ class MacroRegime(Base):
     # Market Participants Survey (TCMB) 24-month-ahead CPI expectation, decimal
     # (e.g., 0.18 = 18%). Feeds DCF terminal growth: g_terminal = expected + real.
     inflation_expectation_24m_pct: Optional[float] = Column(Float)
+    # Damodaran Turkey Equity Risk Premium, decimal (e.g. 0.0889 = 8.89%).
+    # Auto-fetched from pages.stern.nyu.edu/~adamodar/.../ctryprem.html — see
+    # data/sources/damodaran.py. Was manual-entry in macro.yaml until 2026-05-07.
+    equity_risk_premium_pct: Optional[float] = Column(Float)
+    erp_source: Optional[str] = Column(String(64))  # "damodaran_html" / "yaml_fallback"
     regime: Optional[str] = Column(String(20))  # RISK_ON / RISK_OFF / TRANSITION
     weight_adjustments_json: Optional[str] = Column(Text)
     created_at: datetime = Column(DateTime, default=_utcnow, nullable=False)

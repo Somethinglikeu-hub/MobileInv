@@ -100,12 +100,13 @@ class DCFScorer:
             logger.debug("Skipping %s: company_type=%s (not applicable for DCF)", company.ticker, ctype)
             return None
 
-        from datetime import date as _date, timedelta
+        # Centralized point-in-time guard (audit CRITICAL #1, 2026-05-07).
+        from datetime import date as _date
+        from bist_picker.scoring.context import _adjusted_metric_pit_filter
         cutoff_date = scoring_date or _date.today()
-        lagged_cutoff = cutoff_date - timedelta(days=76)
         query = session.query(AdjustedMetric).filter(
             AdjustedMetric.company_id == company_id,
-            AdjustedMetric.period_end <= lagged_cutoff,
+            _adjusted_metric_pit_filter(cutoff_date),
         )
 
         metrics = query.order_by(AdjustedMetric.period_end).all()
@@ -185,7 +186,7 @@ class DCFScorer:
         # Terminal growth comes from _resolve_terminal_growth (dynamic + clamped).
         g_terminal, _ = self._resolve_terminal_growth(session, scoring_date)
         dynamic_enabled = bool(self._cfg.get("dynamic_discount_rate", True))
-        erp = self._get_erp()
+        erp = self._get_erp(session=session, scoring_date=scoring_date)
         min_spread = float(self._cfg.get("min_rate_terminal_spread", 0.05))
 
         if not dynamic_enabled:
@@ -396,11 +397,31 @@ class DCFScorer:
                 self._macro_config_path,
             )
 
-    def _get_erp(self) -> float:
-        """Return the equity risk premium to use in dynamic discount rate.
+    def _get_erp(
+        self,
+        session: Optional[Session] = None,
+        scoring_date: Optional[date] = None,
+    ) -> float:
+        """Return the equity risk premium for the dynamic discount rate.
 
-        Priority: macro.yaml -> thresholds.yaml -> 0.06 default.
+        Priority (2026-05-07: DB-first, YAML is pure fallback):
+          1. ``MacroRegime.equity_risk_premium_pct`` on or before ``scoring_date``
+             (auto-fetched from Damodaran via ``data/sources/damodaran.py``).
+          2. ``config/macro.yaml`` ``erp.equity_risk_premium_try`` (legacy
+             manual entry — still useful when DB is empty / first run).
+          3. ``config/thresholds.yaml`` ``dcf.equity_risk_premium_try``.
+          4. Hard-coded 0.06.
         """
+        if session is not None:
+            query = session.query(MacroRegime).filter(
+                MacroRegime.equity_risk_premium_pct.isnot(None),
+            )
+            if scoring_date is not None:
+                query = query.filter(MacroRegime.date <= scoring_date)
+            latest = query.order_by(MacroRegime.date.desc()).first()
+            if latest is not None and latest.equity_risk_premium_pct is not None:
+                return float(latest.equity_risk_premium_pct)
+
         erp_block = self._macro_cfg.get("erp", {}) or {}
         if "equity_risk_premium_try" in erp_block:
             return float(erp_block["equity_risk_premium_try"])

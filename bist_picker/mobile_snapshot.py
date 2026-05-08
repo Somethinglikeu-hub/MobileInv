@@ -21,7 +21,7 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 
-SNAPSHOT_SCHEMA_VERSION = 1  # APK v1 ile uyumlu — APK Phase 5 UI hazır olunca 2'ye çekilecek
+SNAPSHOT_SCHEMA_VERSION = 2  # 2026-05-08: ALPHA bucket diagnostics + alpha_x_* fields wired through
 PRICE_HISTORY_DAYS = 730
 DEFAULT_MOBILE_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "data" / "mobile_snapshot.db"
 REQUIRED_TABLES = (
@@ -33,6 +33,8 @@ REQUIRED_TABLES = (
     "scoring_latest",
     "adjusted_metrics_latest",
     "price_history_730d",
+    # v2 (2026-05-08)
+    "factor_history_quarterly",
 )
 
 
@@ -166,10 +168,22 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             is_active INTEGER NOT NULL,
             free_float_pct REAL,
             avg_volume_try REAL,
+            -- v2 (2026-05-08): unified ranking surface for the APK Liste tab.
+            -- ranking_score = composite_alpha for now; ranking_source labels the
+            -- pipeline so future ML / blended scores can plug in without
+            -- breaking APK assumptions.
             ranking_score REAL,
             ranking_source TEXT,
+            -- model_score = the sector-specific composite when one applies
+            -- (banking/holding/REIT). NULL for OPERATING. Lets the APK detail
+            -- card show "Banking model: 95.3" when relevant.
             model_score REAL,
             alpha REAL,
+            -- alpha_x_* (v2): research-quality variant. alpha_x_score weighs
+            -- alpha by data confidence; alpha_x_rank is rank within the
+            -- research-eligible set; alpha_x_eligible widens core to also
+            -- include Quality / Free-Float Shadow buckets so the APK has a
+            -- "wider net" view without losing the strict ALPHA Core gate.
             alpha_x_score REAL,
             alpha_x_rank REAL,
             alpha_x_confidence REAL,
@@ -218,6 +232,28 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             related_party_revenue_pct REAL,
             maintenance_capex REAL,
             growth_capex REAL
+        );
+
+        -- Sprint 2 §5 (2026-05-08): quarter-end factor snapshots for the
+        -- v2 mobile sparkline UI. Only the universe of currently-pickable
+        -- companies plus open positions is included — keeps the snapshot
+        -- small (~30 KB at 50 companies × 8 quarters).
+        CREATE TABLE factor_history_quarterly (
+            company_id INTEGER NOT NULL,
+            quarter_end TEXT NOT NULL,
+            scoring_date TEXT NOT NULL,
+            buffett REAL,
+            graham REAL,
+            piotroski REAL,
+            magic_formula REAL,
+            lynch_peg REAL,
+            dcf_mos REAL,
+            momentum REAL,
+            technical REAL,
+            dividend REAL,
+            composite_alpha REAL,
+            data_completeness REAL,
+            PRIMARY KEY (company_id, quarter_end)
         );
 
         CREATE TABLE price_history_730d (
@@ -270,6 +306,46 @@ def _load_latest_adjusted_metrics(session) -> dict[int, AdjustedMetric]:
     return {row.company_id: row for row in rows}
 
 
+def _select_factor_history_universe(
+    companies_by_ticker: dict,
+    open_positions_frame,
+    scoring_frame,
+    top_alpha_n: int = 75,
+) -> list[int]:
+    """Pick the company set worth shipping quarter-end factor history for.
+
+    Universe = currently-open ALPHA positions ∪ top-N alpha_x_eligible
+    companies in the latest scoring snapshot. Anything outside this set
+    won't get a sparkline in the APK, so storing 8 quarters of factor
+    history for it is wasted bytes.
+
+    Returns a list of unique company_ids; keeps the snapshot footprint
+    bounded (~75 companies × 8 quarters × ~12 numeric columns ≈ 60 KB).
+    """
+    ids: set[int] = set()
+
+    if open_positions_frame is not None and not open_positions_frame.empty:
+        for ticker in open_positions_frame.get("ticker", []):
+            company = companies_by_ticker.get(str(ticker))
+            if company is not None:
+                ids.add(company.id)
+
+    if scoring_frame is not None and not scoring_frame.empty:
+        eligible = scoring_frame
+        if "alpha_x_eligible" in eligible.columns:
+            eligible = eligible[eligible["alpha_x_eligible"].astype(bool)]
+        if "alpha_x_score" in eligible.columns:
+            eligible = eligible.sort_values(
+                "alpha_x_score", ascending=False, na_position="last"
+            )
+        for ticker in eligible.head(top_alpha_n).get("ticker", []):
+            company = companies_by_ticker.get(str(ticker))
+            if company is not None:
+                ids.add(company.id)
+
+    return sorted(ids)
+
+
 def _load_price_history(session) -> list[dict[str, Any]]:
     cutoff = date.today() - timedelta(days=PRICE_HISTORY_DAYS)
     rows = (
@@ -318,6 +394,20 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
         latest_scores = _load_latest_scores(session, latest_scoring_date)
         latest_metrics = _load_latest_adjusted_metrics(session)
         price_history = _load_price_history(session)
+        # v2 §5: quarter-end factor history for sparkline UI. Limit the
+        # set to currently-open positions + the top alpha-X eligible
+        # universe so the snapshot stays small. The selection mirrors
+        # what the APK can actually drill into from the Liste tab.
+        factor_history_company_ids = _select_factor_history_universe(
+            companies_by_ticker,
+            open_positions_frame,
+            scoring_frame,
+        )
+        factor_history_frame = read_service.get_factor_history_quarterly(
+            factor_history_company_ids,
+            quarters=8,
+            end_date=latest_scoring_date,
+        )
     finally:
         session.close()
 
@@ -691,6 +781,22 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
                 "adjusted_close",
             ],
             price_history,
+        )
+
+        _write_records(
+            connection,
+            "factor_history_quarterly",
+            [
+                "company_id", "quarter_end", "scoring_date",
+                "buffett", "graham", "piotroski", "magic_formula",
+                "lynch_peg", "dcf_mos", "momentum", "technical",
+                "dividend", "composite_alpha", "data_completeness",
+            ],
+            (
+                factor_history_frame.to_dict(orient="records")
+                if factor_history_frame is not None and not factor_history_frame.empty
+                else []
+            ),
         )
 
         connection.commit()

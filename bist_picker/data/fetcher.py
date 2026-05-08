@@ -550,6 +550,22 @@ class DataFetcher:
         inflation_exp_24m = self._tcmb.fetch_inflation_expectations_24m()
         stats["inflation_expectation_24m"] = inflation_exp_24m
 
+        # Damodaran Turkey ERP — auto-fetch (replaces manual macro.yaml entry,
+        # 2026-05-07). Best-effort; falls back to YAML at scoring time on any
+        # error, so a Damodaran outage cannot break the cron.
+        try:
+            from bist_picker.data.sources.damodaran import fetch_turkey_erp
+            erp_payload = fetch_turkey_erp()
+            damodaran_erp = (
+                erp_payload.equity_risk_premium_pct if erp_payload else None
+            )
+        except Exception as exc:
+            self._console.print(
+                f"  [yellow]Damodaran ERP fetch failed: {exc}[/yellow]"
+            )
+            damodaran_erp = None
+        stats["damodaran_erp"] = damodaran_erp
+
         # Store in macro_regime table
         if not fx.empty:
             for _, row in fx.iterrows():
@@ -576,8 +592,14 @@ class DataFetcher:
 
             self._session.flush()
 
-        # Update latest macro_regime with CPI, policy rate, and 24m inflation expectation
-        if policy_rate is not None or inflation is not None or inflation_exp_24m is not None:
+        # Update latest macro_regime with CPI, policy rate, 24m inflation
+        # expectation and Damodaran ERP.
+        if (
+            policy_rate is not None
+            or inflation is not None
+            or inflation_exp_24m is not None
+            or damodaran_erp is not None
+        ):
             today = date.today()
             existing = (
                 self._session.query(MacroRegime)
@@ -591,12 +613,17 @@ class DataFetcher:
                     existing.cpi_yoy_pct = inflation
                 if inflation_exp_24m is not None:
                     existing.inflation_expectation_24m_pct = inflation_exp_24m
+                if damodaran_erp is not None:
+                    existing.equity_risk_premium_pct = damodaran_erp
+                    existing.erp_source = "damodaran_html"
             else:
                 regime = MacroRegime(
                     date=today,
                     policy_rate_pct=policy_rate,
                     cpi_yoy_pct=inflation,
                     inflation_expectation_24m_pct=inflation_exp_24m,
+                    equity_risk_premium_pct=damodaran_erp,
+                    erp_source=("damodaran_html" if damodaran_erp is not None else None),
                 )
                 self._session.add(regime)
             self._session.flush()
@@ -609,11 +636,12 @@ class DataFetcher:
         policy_str = f"{policy_rate:.1%}" if policy_rate else "N/A"
         inflation_str = f"{inflation:.1%}" if inflation else "N/A"
         exp24_str = f"{inflation_exp_24m:.1%}" if inflation_exp_24m else "N/A"
+        erp_str = f"{damodaran_erp:.2%}" if damodaran_erp is not None else "N/A (YAML fallback)"
         self._console.print(
             f"  Macro: {stats['cpi_points']} CPI points, "
             f"{stats['fx_points']} FX points (source: {fx_source}), "
             f"policy rate={policy_str}, inflation={inflation_str}, "
-            f"24m CPI exp={exp24_str}, "
+            f"24m CPI exp={exp24_str}, Damodaran ERP={erp_str}, "
             f"cpi_history rows persisted={stats.get('cpi_history_points', 0)}"
         )
         return stats

@@ -130,13 +130,15 @@ class BuffettScorer:
                 return None
             ctype = (company.company_type or "").upper()
             
-            # Load metrics via query
-            from datetime import timedelta
+            # Load metrics with the centralized point-in-time guard
+            # (audit CRITICAL #1, 2026-05-07): prefers AdjustedMetric.
+            # publication_date when populated, falls back to the 76-day
+            # heuristic for legacy rows.
+            from bist_picker.scoring.context import _adjusted_metric_pit_filter
             cutoff_date = scoring_date or _date.today()
-            lagged_cutoff = cutoff_date - timedelta(days=76)
             query = session.query(AdjustedMetric).filter(
                 AdjustedMetric.company_id == company_id,
-                AdjustedMetric.period_end <= lagged_cutoff,
+                _adjusted_metric_pit_filter(cutoff_date),
             )
             metrics = query.order_by(AdjustedMetric.period_end).all()
             
@@ -208,15 +210,25 @@ class BuffettScorer:
     # ---- Sub-factor scoring methods ----
 
     def _score_roe_level(self, metrics: list[AdjustedMetric]) -> Optional[float]:
-        """Score based on 5-year (or available) average adjusted ROE.
+        """Score based on 5-year (or available) average ROE.
 
-        0 if ROE < 5%, linear 0-100 for 5%-25%, max 100 at 25%+.
+        Prefers ``roe_real`` (CPI-deflated, audit CRITICAL #3 fix
+        2026-05-07) when populated; falls back to ``roe_adjusted``
+        (IAS-29 nominal) for legacy rows or when CPI history is missing.
+
+        0 if ROE < ``roe_min_score``, linear to 100 at ``roe_full_score``.
+        Thresholds in YAML are real-rate thresholds (8% real ROE floor),
+        which is an aggressive bar in any inflation regime — most BIST
+        operators score 0 here once we strip out CPI pass-through gains.
         """
-        roe_values = [m.roe_adjusted for m in metrics if m.roe_adjusted is not None]
+        roe_values = [
+            (m.roe_real if m.roe_real is not None else m.roe_adjusted)
+            for m in metrics
+            if (m.roe_real is not None or m.roe_adjusted is not None)
+        ]
         if not roe_values:
             return None
 
-        # Use last 5 years or all available
         recent = roe_values[-5:]
         avg_roe = sum(recent) / len(recent)
 
@@ -228,16 +240,24 @@ class BuffettScorer:
     def _score_roe_consistency(self, metrics: list[AdjustedMetric]) -> Optional[float]:
         """Score based on inverse of ROE standard deviation. Stable = good.
 
+        Prefers ``roe_real`` over ``roe_adjusted`` (audit CRITICAL #3,
+        2026-05-07). A volatile *nominal* ROE under volatile inflation
+        can be a stable *real* ROE — measuring stability on the deflated
+        series is what we actually want for "predictable returns on equity".
+
         Low std dev (< 0.03) -> 100, high std dev (> 0.15) -> 0.
         """
-        roe_values = [m.roe_adjusted for m in metrics if m.roe_adjusted is not None]
+        roe_values = [
+            (m.roe_real if m.roe_real is not None else m.roe_adjusted)
+            for m in metrics
+            if (m.roe_real is not None or m.roe_adjusted is not None)
+        ]
         if len(roe_values) < 2:
             return None
 
         recent = roe_values[-5:]
         std = float(np.std(recent, ddof=1))
 
-        # Inverse scale: low std = high score
         return _linear_scale_inverse(std, low=0.03, high=0.15)
 
     def _score_gross_margin(

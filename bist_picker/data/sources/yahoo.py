@@ -14,10 +14,22 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
-import yfinance as yf
 
 from bist_picker.data.cache import FileCache
 from bist_picker.utils.rate_limiter import RateLimiter
+
+
+def _yf():
+    """Lazy import of yfinance.
+
+    yfinance pulls in protobuf, which has C-extension issues on Python
+    3.14 (TypeError: Metaclasses with custom tp_new). Importing it at
+    module level breaks the whole pipeline even when the macro/Damodaran
+    paths never need Yahoo. Importing on first use scopes the breakage
+    to the methods that actually need yfinance.
+    """
+    import yfinance as yf
+    return yf
 
 logger = logging.getLogger("bist_picker.data.sources.yahoo")
 
@@ -64,7 +76,7 @@ class YahooClient:
         self._rate_limiter.wait()
 
         try:
-            yf_ticker = yf.Ticker(yahoo_ticker)
+            yf_ticker = _yf().Ticker(yahoo_ticker)
             # yfinance end_date is exclusive, so add 1 day
             hist = yf_ticker.history(
                 start=start_date.isoformat(),
@@ -209,7 +221,7 @@ class YahooClient:
         self._rate_limiter.wait()
 
         try:
-            yf_ticker = yf.Ticker(index)
+            yf_ticker = _yf().Ticker(index)
             hist = yf_ticker.history(
                 start=start_date.isoformat(),
                 end=(end_date + timedelta(days=1)).isoformat(),
@@ -296,7 +308,7 @@ class YahooClient:
         """
         self._rate_limiter.wait()
         try:
-            yf_ticker = yf.Ticker(symbol)
+            yf_ticker = _yf().Ticker(symbol)
             hist = yf_ticker.history(
                 start=start_date.isoformat(),
                 end=(end_date + timedelta(days=1)).isoformat(),

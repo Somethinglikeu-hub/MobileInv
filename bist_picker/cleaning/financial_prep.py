@@ -358,6 +358,25 @@ class MetricsCalculator:
                     eps_adjusted, prev_eps, period_end, prev_period_end, cpi
                 )
 
+            # Real ROE / ROA via Fisher (audit CRITICAL #3, 2026-05-07).
+            # Trailing-12m CPI ending at period_end. Banks correctly skip
+            # IAS-29 strip but the Fisher conversion still applies — banks
+            # use `models/banking.py` which doesn't read these columns.
+            cpi_for_real = self._get_cpi_series()
+            roe_real = self._adjuster.deflate_rate(
+                roe_adjusted, period_end, cpi_for_real
+            )
+            roa_real = self._adjuster.deflate_rate(
+                roa_adjusted, period_end, cpi_for_real
+            )
+
+            # Capture the latest publication_date across the 3 source
+            # statements so ScoringContext can apply a true point-in-time
+            # guard (audit CRITICAL #1, 2026-05-07). The AdjustedMetric
+            # row was derived from INCOME + BALANCE + CASHFLOW; pick the
+            # latest filed date — that's when the row was first knowable.
+            publication_date = self._latest_publication_date(company_id, period_end)
+
             # ── Update accumulators for next iteration ────────────────────
             prev_eps = eps_adjusted
             prev_period_end = period_end
@@ -389,16 +408,20 @@ class MetricsCalculator:
                 existing.free_cash_flow = free_cash_flow
                 existing.roe_adjusted = roe_adjusted
                 existing.roa_adjusted = roa_adjusted
+                existing.roe_real = roe_real
+                existing.roa_real = roa_real
                 existing.eps_adjusted = eps_adjusted
                 existing.real_eps_growth_pct = real_eps_growth
                 existing.maintenance_capex = maint_capex if capex_abs else None
                 existing.growth_capex = growth_capex_val
                 existing.deferred_tax_stripped = deferred_tax_stripped
                 existing.excess_depreciation_addback = excess_da if excess_da > 0 else None
+                existing.publication_date = publication_date
             else:
                 metric = AdjustedMetric(
                     company_id=company_id,
                     period_end=period_end,
+                    publication_date=publication_date,
                     reported_net_income=reported_ni,
                     monetary_gain_loss=monetary_gl,
                     adjusted_net_income=adjusted_ni,
@@ -406,6 +429,8 @@ class MetricsCalculator:
                     free_cash_flow=free_cash_flow,
                     roe_adjusted=roe_adjusted,
                     roa_adjusted=roa_adjusted,
+                    roe_real=roe_real,
+                    roa_real=roa_real,
                     eps_adjusted=eps_adjusted,
                     real_eps_growth_pct=real_eps_growth,
                     maintenance_capex=maint_capex if capex_abs else None,
@@ -468,6 +493,32 @@ class MetricsCalculator:
             f"{stats['skipped']} skipped, {stats['errors']} errors"
         )
         return stats
+
+    def _latest_publication_date(
+        self, company_id: int, period_end: date,
+    ) -> Optional[date]:
+        """Return the latest filed date across the period's statements.
+
+        AdjustedMetric is a derived row from INCOME + BALANCE + CASHFLOW
+        statements for one period. It only became "knowable" once the
+        latest of the three was filed at KAP. Returning that max date
+        gives ScoringContext a true point-in-time guard (audit
+        CRITICAL #1, 2026-05-07). Returns None if no source statement
+        carries a publication_date (legacy data).
+        """
+        from sqlalchemy import func as _func
+        result = (
+            self._session.query(_func.max(FinancialStatement.publication_date))
+            .filter(
+                FinancialStatement.company_id == company_id,
+                FinancialStatement.period_end == period_end,
+                FinancialStatement.period_type == "ANNUAL",
+                FinancialStatement.statement_type.in_(("INCOME", "BALANCE", "CASHFLOW")),
+                FinancialStatement.publication_date.isnot(None),
+            )
+            .scalar()
+        )
+        return result
 
     def _load_statement_json(
         self, company_id: int, period_end: date, statement_type: str

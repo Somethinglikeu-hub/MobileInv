@@ -17,6 +17,40 @@ from bist_picker.db.schema import (
 
 logger = logging.getLogger(__name__)
 
+# Legacy lag for AdjustedMetric rows that don't yet have publication_date
+# (everything filed before 2026-05-07's pipeline run). Roughly tracks the
+# IFRS Q4 + KAP filing window for BIST issuers.
+_LEGACY_PUBLICATION_LAG_DAYS = 76
+
+
+def _adjusted_metric_pit_filter(scoring_date: date):
+    """SQLAlchemy filter: AdjustedMetric rows knowable on or before scoring_date.
+
+    Used by ScoringContext + every per-scorer fallback path (Buffett /
+    Graham / DCF). Centralized here so the lag heuristic lives in ONE place
+    and can be retired once `publication_date` backfill is complete.
+
+    Mixed mode (audit CRITICAL #1, 2026-05-07):
+      * Rows with ``publication_date IS NOT NULL`` → strict
+        ``publication_date <= scoring_date``.
+      * Legacy rows with ``publication_date IS NULL`` → fall back to the
+        old ``period_end <= scoring_date - 76d`` heuristic.
+    """
+    from datetime import timedelta
+    from sqlalchemy import and_, or_
+    legacy_cutoff = scoring_date - timedelta(days=_LEGACY_PUBLICATION_LAG_DAYS)
+    return or_(
+        and_(
+            AdjustedMetric.publication_date.isnot(None),
+            AdjustedMetric.publication_date <= scoring_date,
+        ),
+        and_(
+            AdjustedMetric.publication_date.is_(None),
+            AdjustedMetric.period_end <= legacy_cutoff,
+        ),
+    )
+
+
 class ScoringContext:
     """Holds pre-fetched data for a batch of companies to avoid N+1 queries.
     
@@ -53,20 +87,21 @@ class ScoringContext:
         for cid, ctype in companies:
             self._company_types[cid] = (ctype or "").upper()
 
-        # 2. Adjusted Metrics
-        from datetime import timedelta
+        # 2. Adjusted Metrics — point-in-time guard (audit CRITICAL #1,
+        # 2026-05-07): prefer the row's own publication_date over the
+        # legacy 76-day heuristic. Mixed mode lets us migrate gradually:
+        # new rows have a real filing date, old rows fall back to the
+        # heuristic so we don't suddenly drop years of history.
+        from sqlalchemy import or_
         cutoff_date = self.scoring_date or date.today()
-        # Fallback 45-day lag for metrics since they don't have publication_date
-        lagged_cutoff = cutoff_date - timedelta(days=76)
-        
         query = (
             self.session.query(AdjustedMetric)
             .filter(
                 AdjustedMetric.company_id.in_(ids_to_load),
-                AdjustedMetric.period_end <= lagged_cutoff,
+                _adjusted_metric_pit_filter(cutoff_date),
             )
         )
-        
+
         metrics = query.order_by(AdjustedMetric.period_end).all()
         for m in metrics:
             self._metrics[m.company_id].append(m)
@@ -80,9 +115,10 @@ class ScoringContext:
                 FinancialStatement.period_type == "ANNUAL",
             )
         )
+        from datetime import timedelta as _td
         if self.scoring_date:
             from sqlalchemy import or_
-            lagged_cutoff_stmt = self.scoring_date - timedelta(days=76)
+            lagged_cutoff_stmt = self.scoring_date - _td(days=76)
             stmt_query = stmt_query.filter(
                 or_(
                     FinancialStatement.publication_date <= self.scoring_date,
@@ -92,7 +128,7 @@ class ScoringContext:
             )
         else:
             # If no scoring_date, we still don't want to use future unfiled statements unconditionally
-            lagged_cutoff_stmt = date.today() - timedelta(days=76)
+            lagged_cutoff_stmt = date.today() - _td(days=76)
             from sqlalchemy import or_
             stmt_query = stmt_query.filter(
                 or_(

@@ -294,8 +294,11 @@ class TestWeightValidation:
     """Tests for scoring_weights.yaml validation."""
 
     def test_all_sections_sum_to_1(self, composer):
-        """All portfolio sections in scoring_weights.yaml must sum to 1.0."""
-        for section in ("alpha", "beta", "delta", "banking", "holding", "ipo"):
+        """All portfolio sections in scoring_weights.yaml must sum to 1.0.
+
+        BETA/DELTA were removed 2026-05-07 — only ALPHA + model sections.
+        """
+        for section in ("alpha", "banking", "holding", "ipo"):
             weights = composer.weights[section]
             total = sum(weights.values())
             assert abs(total - 1.0) < 1e-6, (
@@ -437,7 +440,10 @@ class TestCompose:
         assert result == pytest.approx(60.0, abs=1e-9)
 
     def test_real_weights_operating_score_in_range(self, composer):
-        """Composite score from real weights must be in [0, 100]."""
+        """ALPHA composite from real weights must be in [0, 100].
+
+        BETA/DELTA were removed 2026-05-07.
+        """
         factor_scores = {
             "quality_buffett": 72.0,
             "value_graham_dcf": 55.0,
@@ -446,10 +452,9 @@ class TestCompose:
             "technical": 50.0,
             "piotroski": 65.0,
         }
-        for portfolio in ("alpha", "beta", "delta"):
-            result = composer.compose(1, factor_scores, portfolio, "OPERATING")
-            assert result is not None
-            assert 0.0 <= result <= 100.0, f"{portfolio}: {result}"
+        result = composer.compose(1, factor_scores, "alpha", "OPERATING")
+        assert result is not None
+        assert 0.0 <= result <= 100.0, f"alpha: {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +490,8 @@ class TestComposeAll:
         return row
 
     def test_composites_written_to_db(self, composer, session):
-        """compose_all() should write composite_alpha/beta/delta for each row."""
+        """compose_all() writes composite_alpha; BETA/DELTA always None
+        (removed 2026-05-07)."""
         today = date(2026, 2, 1)
         cid = self._add_company(session, "THYAO")
         self._add_scoring_row(
@@ -504,11 +510,10 @@ class TestComposeAll:
 
         row = session.query(ScoringResult).filter_by(company_id=cid).first()
         assert row.composite_alpha is not None
-        assert row.composite_beta is not None
-        assert row.composite_delta is not None
         assert 0.0 <= row.composite_alpha <= 100.0
-        assert 0.0 <= row.composite_beta <= 100.0
-        assert 0.0 <= row.composite_delta <= 100.0
+        # BETA/DELTA are deprecated columns — always None in v2.
+        assert row.composite_beta is None
+        assert row.composite_delta is None
 
     def test_data_completeness_calculated(self, composer, session):
         """compose_all() should set data_completeness on each row."""
@@ -614,10 +619,15 @@ class TestComposeAll:
         composer.compose_all(session, scoring_date=today)
 
         row = session.query(ScoringResult).filter_by(company_id=cid).first()
-        expected = round(((80.0 * 0.70) + (50.0 * 0.30)) * (0.50 + 0.50 * 0.85), 2)
+        # 2026-05-07: data_penalty for banking-family softened to symmetric
+        # 0.90 + 0.10 * coverage_ratio (was 0.50 + 0.50 * coverage_ratio).
+        # Single-row test → harmonize skips (n_valid <= 1), so the post-
+        # penalty value is what's persisted.
+        expected = round(((80.0 * 0.70) + (50.0 * 0.30)) * (0.90 + 0.10 * 0.85), 2)
         assert row.composite_alpha == pytest.approx(expected, abs=1e-2)
-        assert row.composite_beta == pytest.approx(expected, abs=1e-2)
-        assert row.composite_delta == pytest.approx(expected, abs=1e-2)
+        # BETA/DELTA removed 2026-05-07 — always None.
+        assert row.composite_beta is None
+        assert row.composite_delta is None
         assert row.data_completeness == pytest.approx(85.0)
 
     def test_dcf_is_normalized_without_overwriting_raw_margin(self, composer, session):

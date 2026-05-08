@@ -346,4 +346,7 @@ def test_mobile_snapshot_schema_version_matches_constant(source_engine, tmp_path
         ).fetchone()[0]
 
     assert version == SNAPSHOT_SCHEMA_VERSION
-    assert SNAPSHOT_SCHEMA_VERSION == 1
+    # Bumped 1 → 2 on 2026-05-08 (Sprint 2): alpha_x_* / alpha_research_bucket /
+    # alpha_primary_blocker / ranking_source fields wired through. Bump again on
+    # any future schema change so old APKs can refuse mismatched snapshots.
+    assert SNAPSHOT_SCHEMA_VERSION == 2

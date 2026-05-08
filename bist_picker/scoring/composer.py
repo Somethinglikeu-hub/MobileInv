@@ -1,7 +1,10 @@
 """Score composition module for the BIST Stock Picker.
 
 Combines individual normalized factor scores (0-100 each) into a single
-weighted composite score (0-100) per portfolio type (Alpha / Beta / Delta).
+weighted composite score (0-100). Only the ALPHA portfolio is alive;
+``composite_beta`` and ``composite_delta`` columns are kept on
+``ScoringResult`` for legacy DB compatibility but are always written as
+``None`` (their YAML weight blocks were removed in 2026-05-07 audit fix).
 
 Weight schemes are loaded from config/scoring_weights.yaml. Weights must sum
 to 1.0 per section — this is validated on load and will raise on failure.
@@ -11,10 +14,10 @@ the factors that do have a score, so the composite always reflects whatever
 data is available rather than silently defaulting to zero.
 
 Model-type routing:
-  OPERATING  -> portfolio-specific weights (alpha / beta / delta)
-  BANK       -> banking weights (same composite for all portfolios)
-  HOLDING    -> holding weights (same composite for all portfolios)
-  IPO        -> ipo weights (same composite for all portfolios)
+  OPERATING  -> alpha weights
+  BANK       -> banking weights
+  HOLDING    -> holding weights
+  IPO        -> ipo weights
 """
 
 import copy
@@ -150,8 +153,9 @@ class ScoreComposer:
         Raises:
             ValueError: If any section's weights do not sum to 1.0.
         """
-        # Sections that must sum to 1.0
-        required_sections = {"alpha", "beta", "delta", "banking", "holding", "ipo"}
+        # Sections that must sum to 1.0. BETA/DELTA were removed
+        # 2026-05-07; only ALPHA is alive on the OPERATING side.
+        required_sections = {"alpha", "banking", "holding", "ipo"}
         for section in required_sections:
             if section not in weights:
                 logger.warning("scoring_weights.yaml missing section '%s'", section)
@@ -180,7 +184,7 @@ class ScoreComposer:
         """Return the YAML section name for the given portfolio/model combination.
 
         Args:
-            portfolio: 'alpha', 'beta', or 'delta'.
+            portfolio: 'alpha' (BETA/DELTA were removed 2026-05-07).
             model_type: 'OPERATING', 'BANK', 'FINANCIAL', 'INSURANCE',
                         'HOLDING', 'REIT', 'IPO', or 'SPORT'.
 
@@ -309,7 +313,7 @@ class ScoreComposer:
             factor_scores: Dict mapping weight-key names to normalized scores
                 (0-100 each) or None. Keys must match those in scoring_weights.yaml
                 for the resolved section (portfolio + model_type).
-            portfolio: 'alpha', 'beta', or 'delta'.
+            portfolio: 'alpha' (BETA/DELTA were removed 2026-05-07).
             model_type: 'OPERATING', 'BANK', 'HOLDING', or 'IPO'.
 
         Returns:
@@ -394,7 +398,8 @@ class ScoreComposer:
             mt = row.model_used or "OPERATING"
             model_counts[mt] = model_counts.get(mt, 0) + 1
 
-        for attr in ("composite_alpha", "composite_beta", "composite_delta"):
+        # BETA/DELTA were removed 2026-05-07 — only ALPHA is harmonized.
+        for attr in ("composite_alpha",):
             values = pd.Series(
                 {i: getattr(rows[i], attr) for i in range(len(rows))},
                 dtype=float,
@@ -425,10 +430,15 @@ class ScoreComposer:
                     setattr(row, attr, None)
                     continue
 
-                # Peer group size penalty for non-OPERATING models
+                # Peer group size penalty for non-OPERATING models.
+                # Softened 2026-05-07: was 0.60 + 0.40 * min(1, n/50)
+                # → ~×0.71 haircut for ~14 banks. New formula gives
+                # ~×0.89 for 14 banks, ~×0.93 for 20, full 1.0 at n>=30.
+                # Combined with the symmetric data_penalty above, banks
+                # can now actually compete for top-N (audit HIGH #6).
                 if mt not in ("OPERATING", "SPORT"):
                     n_peers = model_counts.get(mt, 1)
-                    peer_factor = 0.60 + 0.40 * min(1.0, n_peers / 50.0)
+                    peer_factor = 0.80 + 0.20 * min(1.0, n_peers / 30.0)
                     values.iloc[i] = values.iloc[i] * peer_factor
 
             # Skip if all None
@@ -462,7 +472,7 @@ class ScoreComposer:
         For each ScoringResult row that belongs to the given scoring_date
         (defaults to today), this method:
           1. Extracts factor scores from the ORM columns.
-          2. Derives composite_alpha, composite_beta, composite_delta.
+          2. Derives composite_alpha (BETA/DELTA removed 2026-05-07).
           3. Updates data_completeness (fraction of operating factors available).
           4. Commits the updated rows.
 
@@ -513,10 +523,8 @@ class ScoreComposer:
                 if regime_weights:
                     logger.info(f"Using weights for regime {regime}")
                     print(f"[REGIME] Using weights for regime {regime}")
-                    # Apply to standard portfolios
+                    # Apply to ALPHA (BETA/DELTA removed 2026-05-07).
                     working_weights["alpha"] = regime_weights
-                    working_weights["beta"] = regime_weights
-                    working_weights["delta"] = regime_weights
                 else:
                     logger.warning(f"No weights defined for regime {regime}, falling back to defaults.")
                     print(f"[REGIME] No weights defined for regime {regime}, falling back to defaults.")
@@ -589,14 +597,18 @@ class ScoreComposer:
                         if row.data_completeness is None or row.data_completeness < 10.0:
                             row.data_completeness = 100.0
 
-                        # Apply data_penalty
+                        # Apply data_penalty — symmetric with operating
+                        # companies (2026-05-07 fix: was 0.50 + 0.50 *
+                        # coverage_ratio, which double-haircut banks/holdings
+                        # via the harmonize peer_factor and made bank cap
+                        # never bind. See stock_picking_audit.md HIGH #6.)
                         coverage_ratio = (row.data_completeness or 0.0) / 100.0
-                        data_penalty = 0.50 + 0.50 * coverage_ratio
+                        data_penalty = 0.90 + 0.10 * coverage_ratio
                         penalized = round(blended * data_penalty, 2)
 
                         row.composite_alpha = penalized
-                        row.composite_beta = penalized
-                        row.composite_delta = penalized
+                        row.composite_beta = None
+                        row.composite_delta = None
                     else:
                         # Fallback: score with operating factors if model scorer didn't run
                         factor_scores = self._extract_factor_scores(
@@ -606,12 +618,8 @@ class ScoreComposer:
                         row.composite_alpha = self.compose(
                             row.company_id, factor_scores, "alpha", "OPERATING"
                         )
-                        row.composite_beta = self.compose(
-                            row.company_id, factor_scores, "beta", "OPERATING"
-                        )
-                        row.composite_delta = self.compose(
-                            row.company_id, factor_scores, "delta", "OPERATING"
-                        )
+                        row.composite_beta = None
+                        row.composite_delta = None
                         operating_factors_local = [
                             f for f, w in self.weights.get("alpha", {}).items() if w > 0
                         ]
@@ -648,12 +656,10 @@ class ScoreComposer:
                 row.composite_alpha = self.compose(
                     row.company_id, factor_scores, "alpha", model_type
                 )
-                row.composite_beta = self.compose(
-                    row.company_id, factor_scores, "beta", model_type
-                )
-                row.composite_delta = self.compose(
-                    row.company_id, factor_scores, "delta", model_type
-                )
+                # BETA/DELTA removed 2026-05-07; columns retained as None
+                # for legacy DB compatibility.
+                row.composite_beta = None
+                row.composite_delta = None
 
                 # Data completeness: percentage (0-100) of operating factors with a value.
                 n_available = sum(

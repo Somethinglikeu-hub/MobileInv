@@ -130,6 +130,50 @@ class InflationAdjuster:
         return nominal_value * (cpi_to / cpi_from)
 
     @staticmethod
+    def deflate_rate(
+        nominal_rate: Optional[float],
+        period_end: date,
+        cpi_series: pd.Series,
+        lookback_months: int = 12,
+    ) -> Optional[float]:
+        """Convert a nominal rate (e.g. ROE, ROA) to a real rate via Fisher.
+
+        Formula: ``real = (1 + nominal) / (1 + inflation) - 1`` where
+        ``inflation`` is the trailing-12-month CPI growth ending at
+        ``period_end``. Use this for nominal *return* metrics — for
+        nominal level values (TRY amounts), use ``deflate_value``.
+
+        Args:
+            nominal_rate: Nominal rate as a decimal (e.g. 0.30 for 30% ROE).
+            period_end: Reporting period end (e.g. 2025-12-31).
+            cpi_series: CPI index series with date index.
+            lookback_months: Months back for CPI YoY comparison. Default 12.
+
+        Returns:
+            Real rate as a decimal, or None if inputs / CPI insufficient.
+        """
+        if nominal_rate is None:
+            return None
+        if cpi_series is None or cpi_series.empty:
+            return None
+
+        # Approximate "1 year ago" by subtracting lookback_months * 30 days.
+        # CPI series is monthly; _get_nearest_cpi tolerates the rounding.
+        from datetime import timedelta
+        prior_date = period_end - timedelta(days=lookback_months * 30)
+
+        cpi_now = _get_nearest_cpi(cpi_series, period_end)
+        cpi_prior = _get_nearest_cpi(cpi_series, prior_date)
+        if cpi_now is None or cpi_prior is None or cpi_prior <= 0:
+            return None
+
+        inflation = (cpi_now / cpi_prior) - 1.0
+        if inflation <= -1.0:
+            return None
+
+        return (1.0 + nominal_rate) / (1.0 + inflation) - 1.0
+
+    @staticmethod
     def calculate_real_growth(
         current: float,
         previous: float,

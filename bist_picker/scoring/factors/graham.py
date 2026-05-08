@@ -114,12 +114,13 @@ class GrahamScorer:
                 return None
             ctype = (company.company_type or "").upper()
             
-            # Get metrics (filter out future periods with null data)
+            # Centralized point-in-time guard (audit CRITICAL #1,
+            # 2026-05-07).
+            from bist_picker.scoring.context import _adjusted_metric_pit_filter
             cutoff_date = scoring_date or date.today()
-            lagged_cutoff = cutoff_date - timedelta(days=76)
             query = session.query(AdjustedMetric).filter(
                 AdjustedMetric.company_id == company_id,
-                AdjustedMetric.period_end <= lagged_cutoff,
+                _adjusted_metric_pit_filter(cutoff_date),
             )
             metrics = query.order_by(AdjustedMetric.period_end).all()
 

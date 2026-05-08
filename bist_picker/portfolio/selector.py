@@ -74,10 +74,9 @@ _DEFAULT_CONFIG_PATH = (
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+# BETA/DELTA were removed 2026-05-07 (no YAML weights, never written).
 _PORTFOLIO_SCORE_COL: dict[str, str] = {
     "ALPHA": "composite_alpha",
-    "BETA": "composite_beta",
-    "DELTA": "composite_delta",
 }
 _PICKS_PER_PORTFOLIO: int = 5
 # Phase 3 tightening (2026-04-18): 3 -> 2 so a single sector cannot dominate.
@@ -570,6 +569,7 @@ class PortfolioSelector:
                     "dcf_mos": score_row.dcf_margin_of_safety_pct,
                     "data_completeness": getattr(score_row, "data_completeness", None),
                     "technical_score": getattr(score_row, "technical_score", None),
+                    "above_200ma": getattr(score_row, "above_200ma", None),
                     "factor_scores": factor_scores,
                 }
             )
@@ -583,14 +583,36 @@ class PortfolioSelector:
     ) -> bool:
         """Return True if selecting *candidate* would breach any portfolio constraint."""
         # 1. Falling Knife (Düşen Bıçak) Filter
-        # Reject candidates with extremely poor technicals (e.g., well below 200MA + zero momentum)
-        # Even if their fundamental score is perfect, we don't catch falling knives.
+        # Reject candidates whose technicals look bad in BOTH a relative
+        # AND absolute sense. The percentile-only check used to be too
+        # forgiving in bull markets (35th percentile of the universe can
+        # still be a stock above its 200-day MA in a strong tape) and too
+        # strict in bear markets (everything ranks low). Combining the
+        # normalized score with the raw "price above 200-day SMA" signal
+        # makes the filter scale with the actual trend, not just the
+        # cross-section. (Audit MEDIUM #11, 2026-05-07.)
         min_tech = self._cfg.get("min_technical_score", 35.0)
         tech_score = candidate.get("technical_score")
-        if tech_score is not None and tech_score < min_tech:
+        above_200ma = candidate.get("above_200ma")
+
+        # Hard reject: low percentile AND below the long-term trend line.
+        if (
+            tech_score is not None
+            and tech_score < min_tech
+            and above_200ma is False
+        ):
             logger.debug(
-                "Skip %s: 'Falling Knife' filter triggered (technical score %.1f < %.1f)", 
-                candidate["ticker"], tech_score, min_tech
+                "Skip %s: falling-knife (technical %.1f < %.1f AND below 200MA)",
+                candidate["ticker"], tech_score, min_tech,
+            )
+            return True
+        # Backward-compat soft reject: if we don't yet know above_200ma
+        # (legacy DB rows), still apply the original percentile-only filter
+        # so existing behavior is preserved for unmigrated data.
+        if above_200ma is None and tech_score is not None and tech_score < min_tech:
+            logger.debug(
+                "Skip %s: falling-knife legacy (technical %.1f < %.1f, no 200MA data)",
+                candidate["ticker"], tech_score, min_tech,
             )
             return True
 

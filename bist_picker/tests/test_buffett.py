@@ -369,6 +369,81 @@ class TestBuffettScorer:
 # ---- Test with real BIMAS data (integration, skip if no DB) ----
 
 
+class TestRealROEPreference:
+    """Sprint 1 §3.1 (2026-05-07): scorer must prefer roe_real over
+    roe_adjusted when populated; fall back to nominal otherwise."""
+
+    def _add_company(self, session: Session) -> int:
+        c = Company(ticker="INFL", name="Inflated A.S.",
+                    company_type="OPERATING", sector_bist="Sanayi", is_active=True)
+        session.add(c); session.flush()
+        return c.id
+
+    def _add_metric(self, session: Session, cid: int, period_end: date,
+                    roe_adjusted: float | None, roe_real: float | None,
+                    eps_adjusted: float = 1.0):
+        m = AdjustedMetric(
+            company_id=cid, period_end=period_end,
+            roe_adjusted=roe_adjusted, roe_real=roe_real,
+            eps_adjusted=eps_adjusted, adjusted_net_income=1.0,
+            owner_earnings=1.0, free_cash_flow=1.0,
+        )
+        session.add(m); session.flush()
+
+    def test_uses_roe_real_when_available(self, session, scorer):
+        """30% nominal ROE under heavy CPI → low real ROE → low score."""
+        cid = self._add_company(session)
+        # Both nominal and real present. Nominal looks great (30%), real is
+        # actually NEGATIVE — the kind of CPI pass-through Buffett would skip.
+        for i, year in enumerate(range(2020, 2025)):
+            self._add_metric(
+                session, cid, date(year, 12, 31),
+                roe_adjusted=0.30,    # nominal — would max out the score
+                roe_real=-0.05,       # real — should drive the score to ~0
+            )
+        session.commit()
+
+        # Force the financials helpers to return some balance/income data so
+        # buffett doesn't bail early on missing balance.
+        from unittest.mock import patch
+        with patch.object(BuffettScorer, "_load_balance_series", return_value=[
+            {"period_end": date(2024, 12, 31), "total_assets": 100.0, "total_equity": 50.0}
+        ] * 5), patch.object(BuffettScorer, "_load_income_series", return_value=[
+            {"period_end": date(2024, 12, 31), "gross_profit": 30.0, "net_sales": 100.0}
+        ] * 5):
+            result = scorer.score(cid, session)
+
+        assert result is not None
+        # roe_min_score=0.08, roe_full_score=0.25; -0.05 is below floor → 0.
+        assert result["roe_level"] == 0.0, (
+            f"Real ROE -5% should score 0 (below 8% floor); "
+            f"got {result['roe_level']}"
+        )
+
+    def test_falls_back_to_roe_adjusted_when_real_missing(self, session, scorer):
+        """Legacy rows (no roe_real) must keep working with nominal."""
+        cid = self._add_company(session)
+        for year in range(2020, 2025):
+            self._add_metric(
+                session, cid, date(year, 12, 31),
+                roe_adjusted=0.30,    # 30% nominal
+                roe_real=None,        # no real available — fallback path
+            )
+        session.commit()
+
+        from unittest.mock import patch
+        with patch.object(BuffettScorer, "_load_balance_series", return_value=[
+            {"period_end": date(2024, 12, 31), "total_assets": 100.0, "total_equity": 50.0}
+        ] * 5), patch.object(BuffettScorer, "_load_income_series", return_value=[
+            {"period_end": date(2024, 12, 31), "gross_profit": 30.0, "net_sales": 100.0}
+        ] * 5):
+            result = scorer.score(cid, session)
+
+        assert result is not None
+        # 30% nominal >= 25% full-score threshold → 100 (legacy behavior).
+        assert result["roe_level"] == 100.0
+
+
 class TestBuffettReal:
     """Integration test using real DB data for BIMAS."""
 

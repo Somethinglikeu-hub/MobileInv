@@ -307,6 +307,9 @@ def score(ctx: click.Context, use_regime: bool) -> None:
         for cid, result in tech_scores.items():
             if cid in raw_scores:
                 raw_scores[cid]["technical_score"] = result.get("technical_score")
+                # Persist raw above_200ma so the selector can apply an
+                # absolute falling-knife filter (audit MEDIUM #11).
+                raw_scores[cid]["above_200ma"] = result.get("above_200ma")
 
         console.print("[dim]  Running Dividend Yield...[/dim]")
         from bist_picker.scoring.factors.dividend import DividendYieldScorer
@@ -355,7 +358,10 @@ def score(ctx: click.Context, use_regime: bool) -> None:
                        # Phase 5: DCF breakdown + red-flag payload.
                        "dcf_intrinsic_value", "dcf_growth_rate_pct",
                        "dcf_discount_rate_pct", "dcf_terminal_growth_pct",
-                       "quality_flags_json"]
+                       "quality_flags_json",
+                       # Sprint 1 §3.5 (2026-05-07): raw above_200ma for
+                       # absolute falling-knife filter in selector.
+                       "above_200ma"]
         console.print("[dim]  Writing raw scores to DB...[/dim]")
         for cid, row in raw_scores.items():
             existing = (
@@ -391,6 +397,7 @@ def score(ctx: click.Context, use_regime: bool) -> None:
                     reit_composite=row.get("reit_composite"),
                     data_completeness=row.get("data_completeness"),
                     quality_flags_json=row.get("quality_flags_json"),
+                    above_200ma=row.get("above_200ma"),
                 ))
         session.commit()
 

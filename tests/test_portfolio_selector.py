@@ -40,6 +40,8 @@ def _make_candidate(
     company_type: str = "OPERATING",
     dcf_mos: float | None = None,
     data_completeness: float | None = None,
+    technical_score: float | None = None,
+    above_200ma: bool | None = None,
 ) -> dict:
     """Build a minimal candidate dict matching what _fetch_candidates returns."""
     return {
@@ -50,6 +52,8 @@ def _make_candidate(
         "company_type": company_type,
         "dcf_mos": dcf_mos,
         "data_completeness": data_completeness,
+        "technical_score": technical_score,
+        "above_200ma": above_200ma,
     }
 
 
@@ -399,3 +403,80 @@ class TestCombinedConstraints:
         sel = _make_selector()
         with pytest.raises(ValueError, match="GAMMA"):
             sel.select("GAMMA", _mock_session())
+
+
+# ── Sprint 1 §3.5 (2026-05-07): falling-knife uses raw + percentile ─────────
+
+
+class TestFallingKnifeFilter:
+    """Verify the audit MEDIUM #11 fix: combined percentile + 200MA filter."""
+
+    def test_low_percentile_AND_below_200ma_is_rejected(self):
+        """A genuine falling knife (low tech score AND below 200MA) is dropped."""
+        candidates = [
+            _make_candidate(1, "GOOD", 95.0, sector="A", technical_score=80.0, above_200ma=True),
+            _make_candidate(2, "BAD",  90.0, sector="B", technical_score=20.0, above_200ma=False),
+            _make_candidate(3, "OK1",  85.0, sector="C", technical_score=70.0, above_200ma=True),
+            _make_candidate(4, "OK2",  80.0, sector="D", technical_score=65.0, above_200ma=True),
+            _make_candidate(5, "OK3",  75.0, sector="E", technical_score=60.0, above_200ma=True),
+            _make_candidate(6, "OK4",  70.0, sector="F", technical_score=55.0, above_200ma=True),
+        ]
+        picks = _select(candidates)
+        tickers = [p["ticker"] for p in picks]
+        assert "BAD" not in tickers, "Falling knife (low tech AND below 200MA) must be rejected"
+        assert "GOOD" in tickers
+        assert len(picks) == 5
+
+    def test_low_percentile_BUT_above_200ma_is_kept(self):
+        """Bull-market case: percentile low because cross-section is hot, but
+        the stock is still above its 200MA → don't drop it."""
+        candidates = [
+            _make_candidate(1, "TOP",  95.0, sector="A", technical_score=80.0, above_200ma=True),
+            # tech_score 20 (low percentile) but above_200ma=True (uptrend) → KEEP.
+            _make_candidate(2, "DIP",  92.0, sector="B", technical_score=20.0, above_200ma=True),
+            _make_candidate(3, "X1",   80.0, sector="C", technical_score=70.0, above_200ma=True),
+            _make_candidate(4, "X2",   75.0, sector="D", technical_score=70.0, above_200ma=True),
+            _make_candidate(5, "X3",   70.0, sector="E", technical_score=70.0, above_200ma=True),
+        ]
+        picks = _select(candidates)
+        tickers = [p["ticker"] for p in picks]
+        assert "DIP" in tickers, (
+            "A stock with low percentile but above its 200MA should not be "
+            "filtered as a falling knife (audit MEDIUM #11)."
+        )
+
+    def test_below_200ma_BUT_high_percentile_is_kept(self):
+        """Bear-market case: tech percentile high (everyone's worse) but the
+        stock is below 200MA. Without the AND, we'd drop too much; with the
+        AND, the percentile saves it."""
+        candidates = [
+            _make_candidate(1, "STRONG", 95.0, sector="A", technical_score=80.0, above_200ma=False),
+            _make_candidate(2, "X1",     85.0, sector="B", technical_score=70.0, above_200ma=True),
+            _make_candidate(3, "X2",     80.0, sector="C", technical_score=70.0, above_200ma=True),
+            _make_candidate(4, "X3",     75.0, sector="D", technical_score=70.0, above_200ma=True),
+            _make_candidate(5, "X4",     70.0, sector="E", technical_score=70.0, above_200ma=True),
+        ]
+        picks = _select(candidates)
+        tickers = [p["ticker"] for p in picks]
+        assert "STRONG" in tickers, (
+            "A stock with high tech percentile shouldn't be dropped just for "
+            "being below 200MA — the AND combination is intentional."
+        )
+
+    def test_legacy_no_above_200ma_data_falls_back_to_percentile(self):
+        """When the DB row predates Sprint 1 §3.5, above_200ma is None.
+        Backward-compat: fall back to the original percentile-only filter."""
+        candidates = [
+            _make_candidate(1, "GOOD", 95.0, sector="A", technical_score=80.0, above_200ma=None),
+            _make_candidate(2, "BAD",  90.0, sector="B", technical_score=20.0, above_200ma=None),
+            _make_candidate(3, "OK1",  85.0, sector="C", technical_score=70.0, above_200ma=None),
+            _make_candidate(4, "OK2",  80.0, sector="D", technical_score=65.0, above_200ma=None),
+            _make_candidate(5, "OK3",  75.0, sector="E", technical_score=60.0, above_200ma=None),
+            _make_candidate(6, "OK4",  70.0, sector="F", technical_score=55.0, above_200ma=None),
+        ]
+        picks = _select(candidates)
+        tickers = [p["ticker"] for p in picks]
+        assert "BAD" not in tickers, (
+            "Legacy rows (no above_200ma) should still apply the percentile-"
+            "only fallback so existing DBs keep behaving."
+        )

@@ -66,6 +66,51 @@ bist_picker/
 
 Tests live in both `bist_picker/tests/` and top-level `tests/`. `pyproject.toml` lists both.
 
+## Audits — read first when asked "is something wrong with the picks?"
+
+The picking logic has been audited twice. Each audit produced a focused
+findings file. Read those before re-deriving anything.
+
+- **[docs/stock_picking_audit.md](docs/stock_picking_audit.md)** — 2026-05-07
+  audit. Severity-ranked findings, "what's NOT broken" list, and a fast
+  checklist for the next audit. Re-confirms which 2026-04-30 items still
+  bite, splits Buffett issue #2 into sub-parts, and adds 8 new findings the
+  original audit missed (composite_beta/delta dead, asymmetric data penalty
+  for banks, momentum 1-month skip can collapse, Graham value effectively
+  dead in TRY rate environment, etc.). Ends with a "Düşünce süreci" section
+  capturing how the audit was reasoned through.
+- **[docs/mobile_app_v2_plan.md](docs/mobile_app_v2_plan.md)** — 2026-05-07
+  plan for APK v2. User wants better-looking, more detailed, more
+  explanation-rich mobile app, **without AI/LLM** (deterministic templates
+  only). APK source code does NOT exist on disk — only the compiled
+  `app-debug.apk`. The plan documents the full reverse-engineering of v1
+  (via `androguard`, no Java/jadx needed): package `com.bistpicker.mobile`
+  v0.2.0, Compose + M3 + Room + WorkManager + OkHttp + manual DI, 3 tabs
+  (Home/Scoring/Detail), `SelectionExplanationBuilder` already produces
+  Turkish explanation strings via templates. `data/_bundled_v1_snapshot.db`
+  was extracted from the APK's `assets/` for use as a v2 dev fixture.
+  Plan: (a) 5-item minimum picker fix set derived from the audit, (b)
+  snapshot schema v2 — fill in already-expected `alpha_x_*` columns + add
+  `factor_history_quarterly` (sparklines), `home_metrics_history` (equity
+  curve), `pick_explanations` (template-generated, no LLM), (c) brand-new
+  Compose + M3 APK with 3 tabs (Home/Liste/Makro) + Detail screen,
+  properly UTF-8 Turkish in `strings.xml`. Liste tab defaults to
+  ALPHA_CORE view mode, with ALPHA_X/MODEL/RESEARCH/ALL as side tabs.
+  No Settings tab — manual sync + theme toggle live in Home's overflow
+  menu. In-place APK upgrade (same package, versionCode bump). Reverse-
+  engineering also revealed v1 already expects more columns than
+  `mobile_snapshot.py` currently writes — that mismatch is the first
+  thing to fix in Sprint 2. Nothing has been touched yet on the GitHub
+  side (workflows, state/feed repos) — this plan is documentation-only;
+  first real code change lands in Sprint 1.
+- The 2026-04-30 audit table below remains correct as a high-level map.
+
+If the user says "find what's wrong with stock picking" / "audit the picker"
+/ similar, **start by reading `docs/stock_picking_audit.md`**, then verify
+each item is still present (not silently fixed since 2026-05-07). The file's
+"Quick checklist for the next audit" at the bottom gives the fast yes/no
+greps. Do that before grepping the whole codebase from scratch.
+
 ## 2026-04-30 audit — known issues to fix
 
 Strong parts (don't refactor without reason):
@@ -148,3 +193,79 @@ python -m bist_picker export-mobile-feed --feed-dir mobile-feed-dist --base-down
     scoring_date` (drop the 76-day heuristic); replace optimizer's
     hand-cooked objective with portfolio Sharpe; consider also
     inflation-adjusting Buffett ROE/ROA the way OE-trend now is.
+
+- **2026-05-07** — Second audit run (`docs/stock_picking_audit.md`).
+  Re-confirmed audit issues #1, #2, #3 (partial), #4, #6 still present.
+  No new code shipped — this audit is documentation-only, capturing 8
+  additional findings (`composite_beta/delta` dead, asymmetric
+  bank-data-penalty triple-haircut, momentum skip can collapse to 20d,
+  Graham factor effectively dead in TRY rates, Piotroski universe-filter
+  fallback compares percentile to raw threshold, incumbents re-entered at
+  today's price every rebalance, falling-knife filter uses normalized not
+  raw signal, source-detection in `_get_avg_volumes` is fragile). See the
+  audit file for severity, file:line pointers, and proposed fixes.
+
+- **2026-05-08 — Sprint 1: 6 picker fixes shipped + live-validated.**
+  Lifted from the audit's CRITICAL/HIGH/MEDIUM list. 12 new tests, 543/546
+  green (pre-existing 3 DCF failures untouched).
+  1. **§3.3** Removed BETA/DELTA dead code paths from composer.py +
+     selector.py (DB columns retained as legacy NULL for back-compat).
+  2. **§3.4** Softened bank/holding/REIT data-penalty in `composer.py`
+     (`0.50 + 0.50*coverage` was double-haircutting banks; now they
+     compete fairly. Live test: 5 of top-10 are banks/financials —
+     previously 0).
+  3. **§3.5** Falling-knife filter combines percentile + raw 200MA: a
+     stock now needs `technical_score < 35 AND above_200ma=False` to be
+     dropped. Persists `above_200ma` boolean on `ScoringResult` (new
+     column). 4 new tests in `tests/test_portfolio_selector.py`.
+  4. **§3.1** Buffett `_score_roe_level` / `_score_roe_consistency` prefer
+     CPI-deflated ROE over nominal. New `AdjustedMetric.roe_real` /
+     `roa_real` columns populated by `cleaning/financial_prep.py` via
+     Fisher conversion. Falls back to nominal when CPI history empty.
+  5. **§3.2** Centralized point-in-time guard
+     `_adjusted_metric_pit_filter` in `scoring/context.py` — used by
+     ScoringContext, Buffett, Graham, DCF. Prefers
+     `AdjustedMetric.publication_date` (new column) when populated, falls
+     back to 76-day heuristic for legacy rows. KAP scraper still doesn't
+     capture filing dates, so the new path activates once that's wired
+     (Sprint 4 task) — for now we're 100% on legacy heuristic but the
+     scaffolding is in place. 5 new tests pin both paths.
+  6. **§3.7 (new) — Damodaran ERP automated.** Manual `macro.yaml` entry
+     replaced by `bist_picker/data/sources/damodaran.py` which scrapes
+     Damodaran's `ctryprem.html` once per cron and writes
+     `MacroRegime.equity_risk_premium_pct` (auto: `0.0889` on 2026-05-08).
+     `DCFScorer._get_erp(session, scoring_date)` now reads DB-first, YAML
+     fallback only. 4 tests including a live network test (skippable via
+     `BIST_SKIP_NETWORK_TESTS=1`).
+
+  **Live test (2026-05-08):** All 6 fixes ran end-to-end against the
+  production DB. Picks list rotated (TCKRC #2 → #5; rest same set:
+  PCILT, KIMMR, ASELS, LILAK, TCKRC). Banks now rank visibly in scoring
+  but stay out of ALPHA picks because `_ALPHA_CORE_TYPES = {"OPERATING"}`
+  excludes them by design — that decision is unchanged. Buffett-real-ROE
+  is structurally shipped but a no-op in this test env because TCMB key
+  is missing → `cpi_history` empty. Production cron has the key so
+  Fisher activates there.
+
+- **2026-05-08 — Sprint 2 §1-5: snapshot v2 wired.**
+  `SNAPSHOT_SCHEMA_VERSION = 2`. The APK was already expecting these
+  columns; now they're populated.
+  - **§1-4:** wired `alpha_x_score`, `alpha_x_rank`, `alpha_x_eligible`,
+    `alpha_x_confidence`, `alpha_core_eligible`, `alpha_research_bucket`,
+    `alpha_primary_blocker`, `alpha_reason`, `alpha_snapshot_streak`,
+    `ranking_score`, `ranking_source`, `model_score` through to
+    `mobile_snapshot.scoring_latest`. The data was already being computed
+    in `read_service.get_scoring_results` — just had to bump the schema
+    version and fix one pre-existing NaN-handling bug in
+    `_alpha_x_risk_score`.
+  - **§5:** new `factor_history_quarterly` table (594 rows, 75 companies
+    × 8 quarter-ends). Stores Buffett/Graham/Piotroski/DCF/Momentum/
+    Technical/composite_alpha at each quarter-end so v2 APK can render
+    sparklines on the detail screen. Universe = open positions ∪ top-75
+    alpha_x_eligible. ~60 KB additional snapshot footprint.
+
+  **What's still in the v2 plan:** factor_history_quarterly's consumer
+  (the v2 APK detail screen) doesn't exist yet — that needs the Compose
+  rewrite (Sprint 3). `home_metrics_history` and `pick_explanations`
+  tables (§6, §7 in the plan) are deferred until v2 APK build starts;
+  they're additive and don't change v1 behavior.

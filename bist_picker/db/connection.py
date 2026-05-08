@@ -59,6 +59,29 @@ _RUNTIME_SQLITE_COLUMN_ADDS: dict[tuple[str, str], str] = {
     ("portfolio_selections", "reason_top_factors_json"): (
         "ALTER TABLE portfolio_selections ADD COLUMN reason_top_factors_json TEXT"
     ),
+    # Sprint 1 (2026-05-07) — picker fixes:
+    # §3.1 Buffett inflation-aware ROE/ROA (Fisher-deflated).
+    ("adjusted_metrics", "roe_real"): (
+        "ALTER TABLE adjusted_metrics ADD COLUMN roe_real REAL"
+    ),
+    ("adjusted_metrics", "roa_real"): (
+        "ALTER TABLE adjusted_metrics ADD COLUMN roa_real REAL"
+    ),
+    # §3.2 Point-in-time guard for AdjustedMetric.
+    ("adjusted_metrics", "publication_date"): (
+        "ALTER TABLE adjusted_metrics ADD COLUMN publication_date DATE"
+    ),
+    # §3.5 Raw above_200ma signal for falling-knife filter.
+    ("scoring_results", "above_200ma"): (
+        "ALTER TABLE scoring_results ADD COLUMN above_200ma BOOLEAN"
+    ),
+    # §3.7 Damodaran ERP auto-fetch persisted on MacroRegime.
+    ("macro_regime", "equity_risk_premium_pct"): (
+        "ALTER TABLE macro_regime ADD COLUMN equity_risk_premium_pct REAL"
+    ),
+    ("macro_regime", "erp_source"): (
+        "ALTER TABLE macro_regime ADD COLUMN erp_source VARCHAR(64)"
+    ),
 }
 
 _RUNTIME_SQLITE_INDEXES: dict[str, str] = {
