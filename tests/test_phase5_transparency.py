@@ -346,7 +346,8 @@ def test_mobile_snapshot_schema_version_matches_constant(source_engine, tmp_path
         ).fetchone()[0]
 
     assert version == SNAPSHOT_SCHEMA_VERSION
-    # Bumped 1 → 2 on 2026-05-08 (Sprint 2): alpha_x_* / alpha_research_bucket /
-    # alpha_primary_blocker / ranking_source fields wired through. Bump again on
-    # any future schema change so old APKs can refuse mismatched snapshots.
-    assert SNAPSHOT_SCHEMA_VERSION == 2
+    # 2026-05-08 Sprint 2 bumped 1 → 2, but the v1 APK rejected v2 snapshots
+    # ("snapshot sürümü desteklenmiyor: 2"). Reverted to 1 on 2026-05-11; the
+    # new alpha_x_* / factor_history_quarterly content is still emitted (it's
+    # additive), and the version will bump again only when the v2 APK ships.
+    assert SNAPSHOT_SCHEMA_VERSION == 1

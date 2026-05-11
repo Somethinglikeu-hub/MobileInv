@@ -21,7 +21,7 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 
-SNAPSHOT_SCHEMA_VERSION = 2  # 2026-05-08: ALPHA bucket diagnostics + alpha_x_* fields wired through
+SNAPSHOT_SCHEMA_VERSION = 1  # 2026-05-11: reverted from 2 — v1 APK rejects v2 ("snapshot sürümü desteklenmiyor: 2"). New alpha_x_* / factor_history_quarterly content is still emitted (additive), but the version stays at 1 until the v2 APK ships in Sprint 3.
 PRICE_HISTORY_DAYS = 730
 DEFAULT_MOBILE_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "data" / "mobile_snapshot.db"
 REQUIRED_TABLES = (
