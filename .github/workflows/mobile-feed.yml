@@ -3,8 +3,16 @@ name: Publish Mobile Feed
 on:
   workflow_dispatch:
   schedule:
+    # Morning attempts (Istanbul 09:17 / 09:47 / 10:17). Redundancy because
+    # GitHub Actions silently drops scheduled runs under load — at least one
+    # of these will fire. The freshness-guard job below makes duplicates a
+    # no-op so we don't burn runner minutes twice.
     - cron: "17 6 * * 1-5"
+    - cron: "47 6 * * 1-5"
+    - cron: "17 7 * * 1-5"
+    # Evening attempts (Istanbul 19:17 / 19:47).
     - cron: "17 16 * * 1-5"
+    - cron: "47 16 * * 1-5"
 
 concurrency:
   group: mobile-feed-publish
@@ -15,7 +23,44 @@ permissions:
   issues: write  # needed to open/close the macro-staleness reminder issue
 
 jobs:
+  check-freshness:
+    # Fast pre-check: if the feed-repo was published less than 3h ago AND
+    # this was triggered by a scheduled cron (not workflow_dispatch), skip
+    # the expensive pipeline. Lets us stack multiple morning crons without
+    # paying for duplicate publishes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    env:
+      FEED_REPOSITORY: ${{ vars.BIST_FEED_REPOSITORY || format('{0}/MobileInv-feed', github.repository_owner) }}
+      FEED_BRANCH: ${{ vars.BIST_FEED_BRANCH || 'gh-pages' }}
+      GH_TOKEN: ${{ secrets.PUBLISH_REPO_TOKEN }}
+    steps:
+      - name: Decide whether to run
+        id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual / dispatch trigger — always run."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last_commit_iso=$(gh api "repos/${FEED_REPOSITORY}/branches/${FEED_BRANCH}" --jq '.commit.commit.author.date')
+          last_ts=$(date -d "${last_commit_iso}" +%s)
+          now=$(date +%s)
+          age_h=$(( (now - last_ts) / 3600 ))
+          echo "Feed last published ${age_h}h ago (${last_commit_iso})."
+          if [ "${age_h}" -lt 3 ]; then
+            echo "Skipping: feed is fresh (<3h)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   publish-mobile-feed:
+    needs: check-freshness
+    if: needs.check-freshness.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
