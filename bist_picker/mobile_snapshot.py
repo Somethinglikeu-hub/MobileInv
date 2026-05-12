@@ -21,7 +21,7 @@ from bist_picker.db.schema import (
     ScoringResult,
 )
 
-SNAPSHOT_SCHEMA_VERSION = 1  # 2026-05-11: reverted from 2 — v1 APK rejects v2 ("snapshot sürümü desteklenmiyor: 2"). New alpha_x_* / factor_history_quarterly content is still emitted (additive), but the version stays at 1 until the v2 APK ships in Sprint 3.
+SNAPSHOT_SCHEMA_VERSION = 1  # 2026-05-12: kept at 1 to match v1 APK. The v1 APK's SnapshotImportValidator rejects both unexpected schema_version values AND unexpected tables, so `factor_history_quarterly` was also pulled out below until the v2 APK ships in Sprint 3.
 PRICE_HISTORY_DAYS = 730
 DEFAULT_MOBILE_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / "data" / "mobile_snapshot.db"
 REQUIRED_TABLES = (
@@ -33,8 +33,11 @@ REQUIRED_TABLES = (
     "scoring_latest",
     "adjusted_metrics_latest",
     "price_history_730d",
-    # v2 (2026-05-08)
-    "factor_history_quarterly",
+    # 2026-05-12: v1 APK's SnapshotImportValidator rejects snapshots that
+    # contain unexpected tables. `factor_history_quarterly` was added in
+    # Sprint 2 §5 for the v2 APK's sparkline UI — but the v2 APK doesn't
+    # exist yet, so emitting it just breaks the live APK. Re-enable when
+    # Sprint 3 ships.
 )
 
 
@@ -234,27 +237,10 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             growth_capex REAL
         );
 
-        -- Sprint 2 §5 (2026-05-08): quarter-end factor snapshots for the
-        -- v2 mobile sparkline UI. Only the universe of currently-pickable
-        -- companies plus open positions is included — keeps the snapshot
-        -- small (~30 KB at 50 companies × 8 quarters).
-        CREATE TABLE factor_history_quarterly (
-            company_id INTEGER NOT NULL,
-            quarter_end TEXT NOT NULL,
-            scoring_date TEXT NOT NULL,
-            buffett REAL,
-            graham REAL,
-            piotroski REAL,
-            magic_formula REAL,
-            lynch_peg REAL,
-            dcf_mos REAL,
-            momentum REAL,
-            technical REAL,
-            dividend REAL,
-            composite_alpha REAL,
-            data_completeness REAL,
-            PRIMARY KEY (company_id, quarter_end)
-        );
+        -- factor_history_quarterly was added in Sprint 2 §5 for the v2
+        -- APK's sparkline UI. Disabled on 2026-05-12 because the v1 APK
+        -- (still in production until Sprint 3 lands) rejects snapshots
+        -- with unexpected tables. Re-enable alongside the v2 APK build.
 
         CREATE TABLE price_history_730d (
             company_id INTEGER NOT NULL,
@@ -394,20 +380,10 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
         latest_scores = _load_latest_scores(session, latest_scoring_date)
         latest_metrics = _load_latest_adjusted_metrics(session)
         price_history = _load_price_history(session)
-        # v2 §5: quarter-end factor history for sparkline UI. Limit the
-        # set to currently-open positions + the top alpha-X eligible
-        # universe so the snapshot stays small. The selection mirrors
-        # what the APK can actually drill into from the Liste tab.
-        factor_history_company_ids = _select_factor_history_universe(
-            companies_by_ticker,
-            open_positions_frame,
-            scoring_frame,
-        )
-        factor_history_frame = read_service.get_factor_history_quarterly(
-            factor_history_company_ids,
-            quarters=8,
-            end_date=latest_scoring_date,
-        )
+        # 2026-05-12: factor_history_quarterly disabled until v2 APK ships
+        # — see comment on REQUIRED_TABLES. Keep the local variable so the
+        # rest of the function doesn't need conditional plumbing.
+        factor_history_frame = None
     finally:
         session.close()
 
@@ -783,21 +759,8 @@ def export_mobile_snapshot(output_path: str | Path = DEFAULT_MOBILE_SNAPSHOT_PAT
             price_history,
         )
 
-        _write_records(
-            connection,
-            "factor_history_quarterly",
-            [
-                "company_id", "quarter_end", "scoring_date",
-                "buffett", "graham", "piotroski", "magic_formula",
-                "lynch_peg", "dcf_mos", "momentum", "technical",
-                "dividend", "composite_alpha", "data_completeness",
-            ],
-            (
-                factor_history_frame.to_dict(orient="records")
-                if factor_history_frame is not None and not factor_history_frame.empty
-                else []
-            ),
-        )
+        # factor_history_quarterly write disabled — see REQUIRED_TABLES note.
+        _ = factor_history_frame
 
         connection.commit()
         connection.close()
